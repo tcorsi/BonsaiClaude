@@ -69,6 +69,7 @@
   #wirePanel[hidden] { display: none; }
   #wirePanel .m { color: var(--ui-muted); }
   #wirePanel .warn { color: #b0552f; font-weight: 600; }
+  #wirePanel ul { margin: 2px 0; padding-left: 18px; }
   #wirePanel .row { display: flex; gap: 6px; justify-content: flex-end; }
   #wirePanel .row button { background: rgba(0,0,0,.05); }
   #wirePanel .pts { margin-right: auto; display: flex; align-items: center; gap: 6px; color: var(--ui-muted); }
@@ -1805,7 +1806,8 @@ function chainOf(n) {   // o galho inteiro: da base, seguindo a ponta principal
 }
 
 let tool = 'prune', toolSpeed = null;
-let wireBase = null, wireChain = [], wireSet = new Set(), drag = null, treeDirty = false;
+// galhos selecionados no modo arame (Shift+clique junta vários); wireChain = todos os segmentos deles
+let wireBases = [], wireChain = [], wireSet = new Set(), drag = null, treeDirty = false;
 const WIRE_SELECT = [110, 160, 215];
 
 // Pontos de controle: o jogador escolhe quantos (wireHandleN); eles se espalham por igual ao longo do galho.
@@ -1821,12 +1823,22 @@ function refreshHandles() {
   for (const m of handleGroup.children) m.material.dispose();
   handleGroup.clear();
   hoverHandle = null;
-  if (!wireBase || !nodes.includes(wireBase)) { wireBase = null; wireChain = []; wireSet = new Set(); renderWirePanel(); return; }
-  wireChain = chainOf(wireBase);
-  wireSet = new Set(wireChain);
-  // articulações = fim de cada trecho; escolhe as N mais próximas de posições igualmente espaçadas
+  // galhos cortados ou quebrados saem da seleção; dois cliques no mesmo galho não duplicam
+  wireBases = [...new Set(wireBases.filter(b => nodes.includes(b)).map(branchBase))];
+  wireChain = []; wireSet = new Set();
+  for (const base of wireBases) {
+    const chain = chainOf(base);
+    wireChain.push(...chain);
+    chain.forEach(n => wireSet.add(n));
+    addHandles(chain);
+  }
+  colorHandles();
+  renderWirePanel();
+}
+// articulações = fim de cada trecho; escolhe as N mais próximas de posições igualmente espaçadas
+function addHandles(chain) {
   let acc = 0;
-  const ends = wireChain.filter(n => n._e && n.len >= 0.5).map(n => ({ n, at: (acc += n.len) }));
+  const ends = chain.filter(n => n._e && n.len >= 0.5).map(n => ({ n, at: (acc += n.len) }));
   const N = Math.min(wireHandleN, ends.length), picked = [];
   for (let i = 1; i <= N; i++) {
     const target = acc * i / N, after = picked.length ? picked[picked.length - 1].at : -1;
@@ -1836,25 +1848,26 @@ function refreshHandles() {
   }
   let prev = -1;
   for (const e of picked) {
-    const end = wireChain.indexOf(e.n);
+    const end = chain.indexOf(e.n);
     const m = new THREE.Mesh(handleGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.95 }));
     m.renderOrder = 20;
     m.position.copy(e.n._e);
-    m.userData = { node: e.n, pivot: wireChain[prev + 1], from: prev + 1, to: end };
+    m.userData = { node: e.n, pivot: chain[prev + 1], from: prev + 1, to: end, chain };
     handleGroup.add(m);
     prev = end;
   }
-  colorHandles();
-  renderWirePanel();
 }
-// garante pelo menos `want` articulações no galho, dividindo os trechos mais longos ao meio
+// garante pelo menos `want` articulações em cada galho selecionado, dividindo os trechos mais longos ao meio
 function ensureJoints(want) {
-  let chain = chainOf(wireBase), changed = false;
-  while (chain.length < want) {
-    const longest = chain.reduce((a, n) => n.len > a.len ? n : a);
-    if (!splitNode(longest, 2)) break;
-    changed = true;
-    chain = chainOf(wireBase);
+  let changed = false;
+  for (const base of wireBases) {
+    let chain = chainOf(base);
+    while (chain.length < want) {
+      const longest = chain.reduce((a, n) => n.len > a.len ? n : a);
+      if (!splitNode(longest, 2)) break;
+      changed = true;
+      chain = chainOf(base);
+    }
   }
   return changed;
 }
@@ -1863,6 +1876,8 @@ function setHandleCount(n) {
   if (ensureJoints(wireHandleN)) { pushUndo(); rebuild(); save(); }
   else refreshHandles();
 }
+// pontos por galho (com vários galhos selecionados, todos usam a mesma quantidade)
+const handlesPerBranch = () => wireBases.length ? Math.round(handleGroup.children.length / wireBases.length) : 0;
 function stressColor(n) {
   const s = bendAngle(n) / bendLimit(n);
   return s < 0.8 ? 0x5fbf72 : s <= 1 ? 0xe2b545 : 0xe0453a;
@@ -1875,9 +1890,9 @@ function colorHandles() {
   }
 }
 // direção da corda do trecho (do início do pivô até o fim do ponto), calculada pelas direções atuais
-function spanDir(from, to) {
+function spanDir(chain, from, to) {
   const v = new THREE.Vector3();
-  for (let i = from; i <= to; i++) v.addScaledVector(dirOf(wireChain[i]), wireChain[i].len);
+  for (let i = from; i <= to; i++) v.addScaledVector(dirOf(chain[i]), chain[i].len);
   return v.normalize();
 }
 function scaleHandles() {   // tamanho constante na tela
@@ -1889,22 +1904,25 @@ function pickHandle(e) {
   return raycaster.intersectObjects(handleGroup.children, false)[0]?.object ?? null;
 }
 
-function selectBranch(n) {
-  wireBase = n ? branchBase(n) : null;
+// add = true (Shift): junta o galho à seleção, ou tira se ele já estava selecionado
+function selectBranch(n, add = false) {
+  const base = n ? branchBase(n) : null;
+  if (!add) wireBases = base ? [base] : [];
+  else if (base) wireBases = wireBases.includes(base) ? wireBases.filter(b => b !== base) : [...wireBases, base];
   refreshHandles();
   colorBranches();
 }
 
 function startDrag(h) {
   pushUndo();
-  const { pivot: n, from, to, node: end } = h.userData;
+  const { pivot: n, from, to, node: end, chain } = h.userData;
   // o arame cobre todo o trecho; a curvatura (q) fica no pivô, onde o trecho dobra
   const w = SP.wiring;
   for (let i = from; i <= to; i++) {
-    const x = wireChain[i];
+    const x = chain[i];
     if (!x.wire) x.wire = { day: state.day, girth0: x.girth, q: [0, 0, 0, 1], set: wireSetDays(x), prog: 0, bitten: false };
   }
-  drag = { n, from, to, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), end._e.clone()) };
+  drag = { n, from, to, chain, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), end._e.clone()) };
   controls.enabled = false;
 }
 function moveDrag(e) {
@@ -1914,14 +1932,14 @@ function moveDrag(e) {
   if (!raycaster.ray.intersectPlane(drag.plane, p)) return;
   const n = drag.n, want = p.sub(n._s);
   if (want.length() < 1) return;
-  const R = new THREE.Quaternion().setFromUnitVectors(spanDir(drag.from, drag.to), want.normalize());
+  const R = new THREE.Quaternion().setFromUnitVectors(spanDir(drag.chain, drag.from, drag.to), want.normalize());
   rotateSubtree(n, R);
   n.wire.q = wireQuat(n).premultiply(R).toArray();
   treeDirty = true;
   showBendTip(n, e);
 }
 function endDrag() {
-  const n = drag.n, { from, to } = drag;
+  const n = drag.n, { from, to, chain } = drag;
   drag = null;
   controls.enabled = true;
   tipEl.hidden = true;
@@ -1932,7 +1950,7 @@ function endDrag() {
       // quebrou na dobra: o galho cai (o tronco quebra no meio)
       cut(planCut(n._p ? { n, t: 0 } : { n, t: 0.5 }), { undo: false });
       toast(`Crack! O ${n._p ? 'galho' : 'tronco'} quebrou na dobra (${Math.round(bendAngle(n))}° para um limite de ~${Math.round(bendLimit(n))}°). Use Desfazer para voltar.`);
-      selectBranch(null);
+      refreshHandles();   // o pedaço quebrado sai da seleção; os outros galhos continuam selecionados
       return;
     }
     n.scar = true;
@@ -1941,9 +1959,9 @@ function endDrag() {
   }
   // galho deitado (horizontal ou para baixo): a auxina deixa de descer bem e as gemas do trecho acordam.
   // Só conta quando o galho deita mais do que já tinha deitado com este arame.
-  const a = SP.apical, lying = THREE.MathUtils.radToDeg(spanDir(from, to).angleTo(UP));
+  const a = SP.apical, lying = THREE.MathUtils.radToDeg(spanDir(chain, from, to).angleTo(UP));
   if (lying > Math.max(a.bendFrom, (n.wire.lowest ?? 0) + 10)) {
-    const woke = releaseApical(wireChain[to], a.bend * clamp((lying - a.bendFrom) / a.bendFull, 0, 1));
+    const woke = releaseApical(chain[to], a.bend * clamp((lying - a.bendFrom) / a.bendFull, 0, 1));
     n.wire.lowest = lying;
     if (woke) toast(`Galho deitado a ${Math.round(lying)}° da vertical: a dominância da ponta enfraqueceu e ${woke} ${woke === 1 ? 'gema vai' : 'gemas vão'} brotar ao longo dele.`);
   }
@@ -2029,7 +2047,7 @@ function renderWirePanel() {
   if (tool !== 'wire') { wirePanel.hidden = true; return; }
   const allWired = nodes.filter(n => n.wire);
   const removeAllBtn = allWired.length ? '<button id="wireRemoveAll" title="Tira o arame de todos os galhos da árvore">Remover todos os arames</button>' : '';
-  if (!wireBase) {
+  if (!wireBases.length) {
     // sem galho selecionado: só o resumo da árvore e o botão de remover tudo
     if (!allWired.length) { wirePanel.hidden = true; return; }
     const trechos = allWired.length, bitten = allWired.some(n => n.wire.bitten);
@@ -2040,7 +2058,8 @@ function renderWirePanel() {
     document.getElementById('wireRemoveAll').addEventListener('click', removeAllWires);
     return;
   }
-  const base = wireBase, wired = wireChain.filter(n => n.wire);
+  if (wireBases.length > 1) { renderMultiPanel(removeAllBtn); return; }
+  const base = wireBases[0], wired = wireChain.filter(n => n.wire);
   let status = 'Sem arame. Arraste um ponto para dobrar: o arame é colocado no trecho dobrado.';
   if (wired.length) {
     const oldest = wired.reduce((a, n) => n.wire.day < a.wire.day ? n : a);
@@ -2057,13 +2076,38 @@ function renderWirePanel() {
   wirePanel.innerHTML = `<div><b>${base === state.root ? 'Tronco' : 'Galho'}</b> · ${woodLabel(base)} · ⌀ base ${fmtLength(radius(base) * 2)}`
     + ` · curvatura segura ~${Math.round(bendLimit(base))}° na base${wireChain.some(n => n.scar) ? ' · tem cicatriz' : ''}</div>`
     + `<div class="m">${status}</div>`
+    + `<div class="m">Shift+clique em outro galho para selecionar vários</div>`
     + `<div class="row"><span class="pts">Pontos de controle
          <button id="ptsMinus" title="Menos pontos (trechos maiores)">−</button><b>${handleGroup.children.length}</b>
          <button id="ptsPlus" title="Mais pontos (divide os entrenós se precisar)">+</button></span>`
     + `${wired.length ? '<button id="wireRemove">Remover arame</button>' : ''}${removeAllBtn}<button id="wireClose">Fechar</button></div>`;
   wirePanel.hidden = false;
-  document.getElementById('ptsMinus').addEventListener('click', () => setHandleCount(handleGroup.children.length - 1));
-  document.getElementById('ptsPlus').addEventListener('click', () => setHandleCount(handleGroup.children.length + 1));
+  bindWirePanel();
+}
+// vários galhos selecionados: resumo de cada um e ações que valem para todos
+function renderMultiPanel(removeAllBtn) {
+  const wired = wireChain.filter(n => n.wire);
+  const rows = wireBases.map(b => {
+    const ch = chainOf(b), w = ch.filter(n => n.wire);
+    const p = w.length ? Math.min(...w.map(wireProgress)) : 0;
+    return `<li>${b === state.root ? 'Tronco' : 'Galho'} · ${woodLabel(b)} · ⌀ ${fmtLength(radius(b) * 2)} · `
+      + (w.length ? (p >= 1 ? 'arame <b>fixado</b>' : `arame ${Math.round(p * 100)}% fixado`) + (w.some(n => n.wire.bitten) ? ' <span class="warn">⚠️ marcando</span>' : '') : 'sem arame')
+      + '</li>';
+  }).join('');
+  wirePanel.innerHTML = `<div><b>${wireBases.length} galhos selecionados</b> · arraste os pontos de cada um para dobrar</div>`
+    + `<ul class="m">${rows}</ul>`
+    + `<div class="m">Shift+clique num galho selecionado para tirá-lo da seleção</div>`
+    + `<div class="row"><span class="pts">Pontos por galho
+         <button id="ptsMinus" title="Menos pontos (trechos maiores)">−</button><b>${handlesPerBranch()}</b>
+         <button id="ptsPlus" title="Mais pontos (divide os entrenós se precisar)">+</button></span>`
+    + `${wired.length ? '<button id="wireRemove">Remover arame dos selecionados</button>' : ''}${removeAllBtn}<button id="wireClose">Fechar</button></div>`;
+  wirePanel.hidden = false;
+  bindWirePanel();
+}
+function bindWirePanel() {
+  const per = handlesPerBranch();
+  document.getElementById('ptsMinus').addEventListener('click', () => setHandleCount(per - 1));
+  document.getElementById('ptsPlus').addEventListener('click', () => setHandleCount(per + 1));
   document.getElementById('wireRemove')?.addEventListener('click', () => { pushUndo(); removeWires(wireChain); });
   document.getElementById('wireRemoveAll')?.addEventListener('click', removeAllWires);
   document.getElementById('wireClose').addEventListener('click', () => selectBranch(null));
@@ -2090,11 +2134,11 @@ addEventListener('keydown', e => {
   if (e.key === 'p' || e.key === 'P') setTool('prune');
   if (e.key === 'r' || e.key === 'R') setTool(tool === 'branch' ? 'prune' : 'branch');
   if (e.key === 'Escape' && tool === 'wire') selectBranch(null);
-  if (tool === 'wire' && wireBase && (e.key === '+' || e.key === '=')) setHandleCount(handleGroup.children.length + 1);
-  if (tool === 'wire' && wireBase && e.key === '-') setHandleCount(handleGroup.children.length - 1);
+  if (tool === 'wire' && wireBases.length && (e.key === '+' || e.key === '=')) setHandleCount(handlesPerBranch() + 1);
+  if (tool === 'wire' && wireBases.length && e.key === '-') setHandleCount(handlesPerBranch() - 1);
 });
 const HINT_FOR = () => tool === 'wire'
-  ? 'Arame: clique num galho · arraste os pontos para dobrar · + / − muda a quantidade de pontos · Esc solta · A volta à poda'
+  ? 'Arame: clique num galho · Shift+clique junta mais galhos · arraste os pontos para dobrar · + / − muda a quantidade de pontos · Esc solta · A volta à poda'
   : tool === 'branch'
   ? 'Galho inteiro: clique em qualquer ponto de um galho para removê-lo rente ao eixo · R ou ✂️ volta à poda normal'
   : HINT;
@@ -2134,7 +2178,8 @@ el.addEventListener('pointerup', e => {
   if (drag) { endDrag(); down = null; return; }
   if (down && down.b === 0 && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
     const hit = pick(e);
-    if (tool === 'wire') selectBranch(hit && !hit.root ? hit.n : null);
+    // Shift+clique junta (ou tira) um galho da seleção; Shift+clique no vazio não desfaz a seleção
+    if (tool === 'wire') { if (!(e.shiftKey && !hit)) selectBranch(hit && !hit.root ? hit.n : null, e.shiftKey); }
     else if (hit) cut(planCut(hit));
     else togglePause();   // clique no vazio pausa (ou retoma) o tempo
   }
@@ -2359,7 +2404,7 @@ setInterval(save, 5000);
 window.bonsai = { stepDay, newTree, ser, de, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
   transplant, pruneRoots, rootFill, potFactor, setSpot, defoliate, avgLeafLen, foliageNow, lightNow,
   get leaves() { return leaves; }, setTool, selectBranch, bendAngle, bendLimit, removeWires,
-  get wireChain() { return wireChain; }, get handles() { return handleGroup.children; },
+  get wireChain() { return wireChain; }, get wireBases() { return wireBases; }, get handles() { return handleGroup.children; },
   updateCare, updateHud, get SP() { return SP; }, get state() { return state; }, get nodes() { return nodes; }, get roots() { return roots; } };
 requestAnimationFrame(frame);
 </script>
