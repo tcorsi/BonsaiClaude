@@ -195,13 +195,18 @@ const SPECIES = {
     // dominância apical: a ponta produz auxina, que desce pelo galho e mantém as gemas de baixo dormentes.
     // Tirar a ponta (poda) ou deitar o galho (arame na horizontal/para baixo) libera essas gemas.
     apical: {
-      reach: 8,               // quantos nós abaixo do corte/dobra sentem a liberação
-      decay: 3,               // a chance cai com a distância (nós); perto do corte brota mais
+      reach: 100,             // até quantos mm abaixo do corte/dobra as gemas sentem a liberação
+      decay: 40,              // a chance cai com a distância (mm); perto do corte brota mais
       prune: 1,               // gemas acordadas por nó logo abaixo do corte (vai caindo com a distância)
       bend: 1,                // ... e ao deitar o galho com arame (proporcional a quanto ele deitou)
       bendFrom: 70,           // a partir de quantos graus da vertical o galho "deitado" perde a dominância
       bendFull: 30,           // graus além disso para o efeito máximo (≈ 100°: horizontal ou um pouco abaixo)
-      oldWood: 1,             // o ficus brota bem em madeira velha (espécies que não brotam: < 0,3)
+      // madeira velha: casca grossa, gemas dormentes mais fundas e mais raras. O ficus ainda brota nela
+      // (por isso aguenta podas drásticas), mas bem menos e mais devagar que num ramo novo
+      oldWood: 0.15,          // fator de brotação na madeira mais velha (espécies que não brotam: ~0)
+      matureDays: 120,        // até essa idade (ramo verde/novo) brota com facilidade total
+      oldDays: 900,           // a partir dessa idade vale o fator oldWood
+      budAbort: 0.01,         // por dia: gema em madeira velha que não brotou pode voltar a dormir
     },
     // Calibrado com um ficus real de semente: ~10 mm de base aos 10 meses, com bons cuidados.
     shootGrowth: 2,          // velocidade de alongamento e de brotação das pontas
@@ -717,8 +722,11 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day)) {
     // gemas latentes acordam onde houve poda; num toco sem galhos, uma delas pode virar a nova ponta
     // cada gema acordada brota por conta própria (várias podem abrir na mesma época)
     if (n.buds > 0 && n.len >= n.target && n.depth < MAX_DEPTH) {
+      const vig = budVigor(n);
       for (let i = n.buds; i > 0 && nodeCount < MAX_NODES; i--) {
-        if (Math.random() >= SP.backBudding * g * RATE) continue;
+        // gema em madeira velha pode desistir e voltar a dormir (num toco sem galhos a última sempre fica)
+        if ((n.kids.length || n.buds > 1) && Math.random() < (1 - vig) * SP.apical.budAbort) { n.buds--; continue; }
+        if (Math.random() >= SP.backBudding * g * RATE * vig) continue;
         sprout(n, !n.kids.length && Math.random() < 0.5, true);
         n.buds--;
       }
@@ -1621,15 +1629,21 @@ function setHover(hit) {
   if (changed) { hoverSet = plan ? plan.removed : new Set(); colorBranches(); }
 }
 
+// facilidade de brotar conforme a idade do segmento: 1 em ramo novo, SP.apical.oldWood em madeira velha
+function budVigor(n) {
+  const a = SP.apical;
+  return lerp(1, a.oldWood, clamp((n.age - a.matureDays) / (a.oldDays - a.matureDays), 0, 1));
+}
+
 // Libera a dominância apical: descendo pelo galho a partir de `start` (em direção à base),
 // cada nó pode ganhar uma gema que vai brotar; mais perto do corte/dobra, mais provável.
 // Devolve quantas gemas acordaram.
 function releaseApical(start, strength) {
   const a = SP.apical;
-  let woke = 0, k = 0;
-  for (let cur = start; cur && k < a.reach; cur = cur._p, k++) {
-    // valor esperado de gemas neste nó (pode passar de 1 perto do corte)
-    const expected = strength * a.oldWood * Math.exp(-k / a.decay);
+  let woke = 0, dist = 0;
+  for (let cur = start; cur && dist <= a.reach; dist += cur.len, cur = cur._p) {
+    // valor esperado de gemas neste nó (pode passar de 1 perto do corte); cai com a distância e a idade da madeira
+    const expected = strength * Math.exp(-dist / a.decay) * budVigor(cur);
     const n = Math.floor(expected) + (Math.random() < expected % 1 ? 1 : 0);
     const add = Math.min(n, 4 - cur.buds);
     if (add > 0) { cur.buds += add; woke += add; }
@@ -2342,7 +2356,7 @@ updateCare();
 setCamera(VIEWS.home, HOME_TARGET);
 setInterval(save, 5000);
 // exposto para depuração no console
-window.bonsai = { stepDay, newTree, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
+window.bonsai = { stepDay, newTree, ser, de, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
   transplant, pruneRoots, rootFill, potFactor, setSpot, defoliate, avgLeafLen, foliageNow, lightNow,
   get leaves() { return leaves; }, setTool, selectBranch, bendAngle, bendLimit, removeWires,
   get wireChain() { return wireChain; }, get handles() { return handleGroup.children; },
