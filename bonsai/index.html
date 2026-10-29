@@ -199,6 +199,8 @@ const SPECIES = {
       reach: 100,             // até quantos mm abaixo do corte/dobra as gemas sentem a liberação
       decay: 40,              // a chance cai com a distância (mm); perto do corte brota mais
       prune: 1,               // gemas acordadas por nó logo abaixo do corte (vai caindo com a distância)
+      pinch: 0.3,             // ... num beliscão (só a ponta nova sai): a auxina volta logo e acorda bem menos
+      hardCut: 15,            // ramos removidos para o corte contar como poda forte (efeito total)
       bend: 1,                // ... e ao deitar o galho com arame (proporcional a quanto ele deitou)
       bendFrom: 70,           // a partir de quantos graus da vertical o galho "deitado" perde a dominância
       bendFull: 30,           // graus além disso para o efeito máximo (≈ 100°: horizontal ou um pouco abaixo)
@@ -1682,8 +1684,10 @@ function cut(plan, { undo = true } = {}) {
     const wasApex = p.kids[0] === plan.n;    // cortou a continuação (ponta) do galho, ou só um lateral?
     p.kids.splice(p.kids.indexOf(plan.n), 1);
     if (!wasApex) addWound(p, plan.n);
-    p.stopped = true;                        // a gema da ponta foi removida...
-    p.buds = Math.min(4, p.buds + 2);        // ...então gemas laterais vão brotar
+    if (wasApex) {
+      p.stopped = true;                      // a gema da ponta foi removida...
+      p.buds = Math.min(4, p.buds + 2);      // ...então as gemas logo abaixo vão brotar
+    } else if (Math.random() < 0.5) p.buds = Math.min(4, p.buds + 1);   // tirar um lateral às vezes acorda a gema acessória
     // tirar a ponta libera as gemas ao longo do galho; tirar só um lateral libera bem menos
     releaseApical(p, SP.apical.prune * (wasApex ? 1 : 0.3));
   } else {
@@ -1693,8 +1697,10 @@ function cut(plan, { undo = true } = {}) {
     n.kids = [];
     n.aerial = n.aerial.filter(r => r.d <= n.len);   // raízes acima do corte saem junto
     n.stopped = true;
-    n.buds = Math.min(4, n.buds + (plan.removed.size > 20 ? 4 : 2));
-    releaseApical(n._p, SP.apical.prune);     // sem a ponta, as gemas abaixo do corte acordam
+    // beliscar a ponta (tirar só o crescimento novo) solta 1–2 brotos; um corte forte, de muitos ramos, solta mais
+    const hard = clamp(plan.removed.size / SP.apical.hardCut, 0, 1);
+    n.buds = Math.min(4, n.buds + 1 + Math.round(2 * hard));
+    releaseApical(n._p, SP.apical.prune * lerp(SP.apical.pinch, 1, hard));   // sem a ponta, as gemas abaixo acordam
   }
   state.cuts++;
   setHover(null);
