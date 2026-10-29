@@ -2327,7 +2327,10 @@ function updateCare() {
   if (c.volume === Infinity) setMeter('Roots', 0.1, '#7f9c55', 'Espaço de sobra no solo');
   else setMeter('Roots', Math.min(1, fill), fill > 0.92 ? '#c0583a' : fill > SP.roots.boundAt ? '#c9a23c' : '#8a6a4a',
     `${Math.round(fill * 100)}% do vaso · ` + (fill > 0.92 ? 'enraizada: transplante ou pode as raízes'
-      : fill > SP.roots.boundAt ? 'raízes apertadas, crescimento caindo' : fill > 0.5 ? 'crescendo bem' : 'espaço de sobra'));
+      : fill > SP.roots.boundAt ? 'raízes apertadas, crescimento caindo'
+      // raízes paradas no tamanho que a copa sustenta (equilíbrio raiz/copa), não no espaço do vaso
+      : state.rootMass >= rootTarget() * 0.9 ? `limitada pela copa (sustenta ~${Math.round(rootTarget() / c.volume * 100)}%): mais folhas, mais raiz`
+      : fill > 0.5 ? 'crescendo bem' : 'espaço de sobra'));
   // luz
   const L = lightNow();
   setMeter('Light', L, L >= 0.8 ? '#e0b43c' : L >= 0.5 ? '#c9b46a' : '#8f96a3',
