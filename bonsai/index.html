@@ -190,7 +190,18 @@ const SPECIES = {
     origin: 'Sul e Sudeste da Ásia até a Austrália',
     growthBySeason: [1, 0.85, 0.4, 0.12],  // tropical: cresce no calor e quase para no frio
     leafDrop: 0.08,          // perene: só ~8% das folhas se renovam no frio (1 = caducifólia)
-    backBudding: 0.1,        // chance de uma gema latente brotar após poda (× RATE por dia: ~3-4 semanas)
+    backBudding: 0.2,        // chance diária de cada gema acordada brotar (× RATE: ~2 semanas no verão)
+    // dominância apical: a ponta produz auxina, que desce pelo galho e mantém as gemas de baixo dormentes.
+    // Tirar a ponta (poda) ou deitar o galho (arame na horizontal/para baixo) libera essas gemas.
+    apical: {
+      reach: 8,               // quantos nós abaixo do corte/dobra sentem a liberação
+      decay: 3,               // a chance cai com a distância (nós); perto do corte brota mais
+      prune: 1,               // gemas acordadas por nó logo abaixo do corte (vai caindo com a distância)
+      bend: 1,                // ... e ao deitar o galho com arame (proporcional a quanto ele deitou)
+      bendFrom: 70,           // a partir de quantos graus da vertical o galho "deitado" perde a dominância
+      bendFull: 30,           // graus além disso para o efeito máximo (≈ 100°: horizontal ou um pouco abaixo)
+      oldWood: 1,             // o ficus brota bem em madeira velha (espécies que não brotam: < 0,3)
+    },
     // Calibrado com um ficus real de semente: ~10 mm de base aos 10 meses, com bons cuidados.
     shootGrowth: 2,          // velocidade de alongamento e de brotação das pontas
     seedling: { start: 0.6, days: 120 },    // plântula começa a 60% da velocidade e chega a 100% em ~4 meses
@@ -218,8 +229,11 @@ const SPECIES = {
       woodyLimit: 70,         // referência da madeira: o limite cai com a espessura (70° / (1 + ⌀mm/4))
       lignifyDays: 120,       // dias até o ramo verde virar madeira
       winterFactor: 0.8,      // no frio a madeira fica mais quebradiça
-      setGreen: 60,           // dias para um ramo verde fixar a nova forma
-      setWoody: 180,          // ... e para madeira velha
+      // dias de crescimento ativo (primavera/verão) para o galho fixar a nova forma.
+      // O ficus fixa rápido: na prática o arame sai com 6 a 8 semanas, antes de marcar a casca
+      setGreen: 45,           // ramo verde
+      setWoody: 60,           // ramo lignificado típico
+      setThick: 15,           // dias a mais para os galhos mais grossos (⌀ 20 mm ou mais)
       springBack: 0.7,        // tirando o arame antes de fixar, o galho volta essa fração do que faltava
       bite: 0.15,             // o arame marca a casca quando o galho engrossa 15% (mín. ~0,6 mm)
       breakSlope: 2,          // risco de quebra = (curvatura / limite − 1) × breakSlope
@@ -261,6 +275,13 @@ const SPECIES = {
     },
     roots: {
       growth: 0.008,          // litros de raiz por dia (× estação × vigor × tamanho da copa)
+      base: 0.08,             // mínimo que cresce sem folhagem (plântula vivendo das reservas da semente)
+      // equilíbrio raiz/copa: as folhas produzem o açúcar que alimenta as raízes; a copa sustenta no
+      // máximo `balance` litros de raiz por unidade de área foliar (medido: 0,4 a 1,8 mL numa árvore saudável)
+      balance: 0.0025,
+      minMass: 0.02,          // raiz mínima que qualquer planta sustenta (L)
+      dieBack: 0.008,         // fração do excesso de raiz que morre por dia quando a copa não sustenta mais
+      foliageMemory: 30,      // dias: a raiz "sente" a média da folhagem (uma desfolha curta não mata raízes)
       boundAt: 0.8,           // a partir de 80% do vaso ocupado o crescimento começa a cair
       boundGrowth: 0.3,       // crescimento com o vaso totalmente tomado por raízes
       boundThirst: 2.5,       // vaso enraizado seca mais rápido (até +50% de consumo)
@@ -281,6 +302,7 @@ const SPECIES = {
       'Folhas perenes, elípticas, verde-escuras e brilhantes',
       'Casca lisa e cinza-clara',
       'Brota com facilidade em madeira velha: tolera podas drásticas',
+      'Dominância apical: tirar a ponta ou deitar o galho com arame acorda gemas ao longo do galho e gera ramificação',
       'Cresce rápido: com bons cuidados, a muda de semente chega a ~1 cm de base em 10 meses e, sem poda, engrossa ~1 cm por ano. Quanto mais folhagem, mais rápido; deixar galhos crescerem livres ("galhos de sacrifício") engrossa o tronco, podar muito desacelera',
       'Forma raízes aéreas quando o ar está úmido (acima de ~70%); ao tocar o solo, elas engrossam e viram pilares',
       'Gosta de terra sempre levemente úmida; sofre com secas e com encharcamento',
@@ -356,7 +378,8 @@ let state, nodeCount = 0;
 // container/rootMass: vaso atual e litros de raiz (saves antigos estavam no vaso de bonsai)
 const CARE_DEFAULTS = { water: 0.7, humidity: 0.6, vigor: 1, recovery: 1, waterUse: 0, autoWater: false, flags: {},
   container: 'bonsai', rootMass: 0.6,
-  spot: 'sun', leafLoss: 0, defolBoost: 0 };   // lugar (luz), folhas caídas por aclimatação, efeito da desfolha
+  spot: 'sun', leafLoss: 0, defolBoost: 0,     // lugar (luz), folhas caídas por aclimatação, efeito da desfolha
+  foliageAvg: null };                          // média recente da folhagem (equilíbrio raiz/copa)
 
 // ---------- Luz ----------
 const SPOTS = {
@@ -420,11 +443,20 @@ function potFactor() {
   const bound = fill > r.boundAt ? lerp(1, r.boundGrowth, clamp((fill - r.boundAt) / (1 - r.boundAt), 0, 1)) : 1;
   return container().growth * bound;
 }
+// quanto de raiz a copa atual consegue sustentar (L)
+const rootTarget = () => SP.roots.minMass + (state.foliageAvg ?? foliageNow()) * SP.roots.balance;
+
 function growRootMass() {
-  const leafCount = foliageNow();
+  const r = SP.roots, foliage = foliageNow();
+  state.foliageAvg = state.foliageAvg == null ? foliage : lerp(state.foliageAvg, foliage, 1 / r.foliageMemory);
   const g = growthFactor(state.day) * vigorNow();
-  const grow = SP.roots.growth * g * (0.3 + Math.sqrt(leafCount) / 30);
+  // as raízes crescem com o que as folhas produzem agora, e só enquanto a copa ainda sustenta mais raiz
+  const target = rootTarget();
+  const room = clamp((1 - state.rootMass / target) / 0.3, 0, 1);
+  const grow = r.growth * g * (r.base + Math.sqrt(foliage) / 30) * room;
   state.rootMass = Math.min(state.rootMass + grow, container().volume);   // no solo não há limite
+  // copa pequena demais para tanta raiz (poda drástica, desfolha longa): as raízes finas morrem aos poucos
+  if (state.rootMass > target) state.rootMass -= (state.rootMass - target) * r.dieBack;
   const fill = rootFill();
   if (fill > 0.92) notify('rootbound', 'As raízes tomaram o vaso e o crescimento parou. Transplante para um vaso maior ou use ✂️ Raízes para podar e continuar no mesmo vaso.');
   else if (fill < 0.7) state.flags.rootbound = false;
@@ -668,9 +700,13 @@ function grow(n, g, onTrunk = true) {
       }
     }
     // gemas latentes acordam onde houve poda; num toco sem galhos, uma delas pode virar a nova ponta
-    if (n.buds > 0 && n.len >= n.target && n.depth < MAX_DEPTH && nodeCount < MAX_NODES && Math.random() < SP.backBudding * g * RATE) {
-      sprout(n, !n.kids.length && Math.random() < 0.5, true);
-      n.buds--;
+    // cada gema acordada brota por conta própria (várias podem abrir na mesma época)
+    if (n.buds > 0 && n.len >= n.target && n.depth < MAX_DEPTH) {
+      for (let i = n.buds; i > 0 && nodeCount < MAX_NODES; i--) {
+        if (Math.random() >= SP.backBudding * g * RATE) continue;
+        sprout(n, !n.kids.length && Math.random() < 0.5, true);
+        n.buds--;
+      }
     }
   }
   if (g > 0) gravitropicBend(n, g, onTrunk);
@@ -685,6 +721,8 @@ function grow(n, g, onTrunk = true) {
   if (g > 0) n.girth += SP.thickening * g * RATE * ring;
   // arame esquecido: o galho engrossa por dentro dele e a casca fica marcada
   const w = n.wire;
+  // a forma fixa enquanto a madeira se forma: cada dia de crescimento ativo conta (inverno quase não conta)
+  if (w && (w.prog ?? 0) < 1) w.prog = Math.min(1, wireProgress(n) + setActivity() / w.set);
   if (w && !w.bitten && n.girth > w.girth0 + Math.max(0.65, w.girth0 * SP.wiring.bite)) {
     w.bitten = true;
     n.scar = true;
@@ -774,15 +812,22 @@ function avgLeafLen() {
 }
 function collect(n, set) { set.add(n); for (const k of n.kids) collect(k, set); return set; }
 
+// progresso da fixação de um arame (0 a 1); arames de saves antigos, sem `prog`, contam pelos dias corridos
+const wireProgressOf = w => clamp(w.prog ?? (state.day - w.day) / w.set, 0, 1);
+
 // ---------- Salvar / carregar ----------
 const ser = n => [n.len, n.target, n.dir, n.depth, n.girth, n.buds, n.age, n.seed, n.phi, n.stopped ? 1 : 0, n.kids.map(ser),
   n.aerial.map(r => [r.d, r.ang, r.len, r.girth, r.grounded ? 1 : 0]),
-  n.wire ? [n.wire.day, n.wire.girth0, n.wire.q, n.wire.set, n.wire.bitten ? 1 : 0] : 0, n.scar ? 1 : 0, n.lf ?? 1,
+  n.wire ? [n.wire.day, n.wire.girth0, n.wire.q, n.wire.set, n.wire.bitten ? 1 : 0, Math.round(wireProgressOf(n.wire) * 1000) / 1000,
+    Math.round(n.wire.lowest ?? 0)] : 0,
+  n.scar ? 1 : 0, n.lf ?? 1,
   n.leafLen ? Math.round(n.leafLen * 10) / 10 : 0, n.leafBack ?? 0, n.stretch ? Math.round(n.stretch * 100) / 100 : 0];
 const de = a => ({ len: a[0], target: a[1], dir: a[2], depth: a[3], girth: a[4], buds: a[5], age: a[6], seed: a[7],
   phi: a[8], stopped: !!a[9], kids: a[10].map(de),
   aerial: (a[11] ?? []).map(r => ({ d: r[0], ang: r[1], len: r[2], girth: r[3], grounded: !!r[4] })),
-  wire: a[12] ? { day: a[12][0], girth0: a[12][1], q: a[12][2], set: a[12][3], bitten: !!a[12][4] } : null,
+  // arames antigos (sem progresso salvo) ganham o tempo de fixação novo do ficus, contado do dia em que foram colocados
+  wire: a[12] ? { day: a[12][0], girth0: a[12][1], q: a[12][2], set: a[12][5] === undefined ? Math.min(a[12][3], 60) : a[12][3],
+    bitten: !!a[12][4], prog: a[12][5], lowest: a[12][6] || 0 } : null,
   scar: !!a[13], lf: a[14] ?? 1, leafLen: a[15] || null, leafBack: a[16] || 0, stretch: a[17] || 1 });
 
 // Divide um entrenó em k trechos retos iguais (articulações extras para o arame), sem mudar a planta:
@@ -1490,6 +1535,22 @@ function setHover(hit) {
   if (changed) { hoverSet = plan ? plan.removed : new Set(); colorBranches(); }
 }
 
+// Libera a dominância apical: descendo pelo galho a partir de `start` (em direção à base),
+// cada nó pode ganhar uma gema que vai brotar; mais perto do corte/dobra, mais provável.
+// Devolve quantas gemas acordaram.
+function releaseApical(start, strength) {
+  const a = SP.apical;
+  let woke = 0, k = 0;
+  for (let cur = start; cur && k < a.reach; cur = cur._p, k++) {
+    // valor esperado de gemas neste nó (pode passar de 1 perto do corte)
+    const expected = strength * a.oldWood * Math.exp(-k / a.decay);
+    const n = Math.floor(expected) + (Math.random() < expected % 1 ? 1 : 0);
+    const add = Math.min(n, 4 - cur.buds);
+    if (add > 0) { cur.buds += add; woke += add; }
+  }
+  return woke;
+}
+
 function cut(plan, { undo = true } = {}) {
   if (undo) pushUndo();
   const amt = leafAmount(state.day);
@@ -1502,9 +1563,12 @@ function cut(plan, { undo = true } = {}) {
     plan.n.aerial.splice(plan.n.aerial.indexOf(plan.root), 1);
   } else if (plan.whole) {
     const p = plan.parent;
+    const wasApex = p.kids[0] === plan.n;    // cortou a continuação (ponta) do galho, ou só um lateral?
     p.kids.splice(p.kids.indexOf(plan.n), 1);
     p.stopped = true;                        // a gema da ponta foi removida...
     p.buds = Math.min(4, p.buds + 2);        // ...então gemas laterais vão brotar
+    // tirar a ponta libera as gemas ao longo do galho; tirar só um lateral libera bem menos
+    releaseApical(p, SP.apical.prune * (wasApex ? 1 : 0.3));
   } else {
     // corta o galho no ponto escolhido; o toco fica e solta brotos novos
     const n = plan.n;
@@ -1513,11 +1577,12 @@ function cut(plan, { undo = true } = {}) {
     n.aerial = n.aerial.filter(r => r.d <= n.len);   // raízes acima do corte saem junto
     n.stopped = true;
     n.buds = Math.min(4, n.buds + (plan.removed.size > 20 ? 4 : 2));
+    releaseApical(n._p, SP.apical.prune);     // sem a ponta, as gemas abaixo do corte acordam
   }
   state.cuts++;
   setHover(null);
   rebuild(); updateHud();
-  if (state.cuts === 1 && !plan.root) toast('Galho podado! Novos brotos vão surgir perto do corte na próxima época de crescimento.');
+  if (state.cuts === 1 && !plan.root) toast('Galho podado! Sem a ponta, a auxina deixa de segurar as gemas: vão brotar ramos no corte e ao longo do galho, até na madeira velha.');
   save();
 }
 
@@ -1603,7 +1668,14 @@ function bendLimit(n) {   // graus de curvatura seguros para este segmento
 const wireQuat = n => new THREE.Quaternion(...(n.wire?.q ?? [0, 0, 0, 1]));
 const bendAngle = n => n.wire ? THREE.MathUtils.radToDeg(2 * Math.acos(clamp(Math.abs(n.wire.q[3]), 0, 1))) : 0;
 const woodLabel = n => { const l = lignin(n); return l < 0.35 ? 'ramo verde' : l < 1 ? 'lignificando' : 'lenhoso'; };
-const wireProgress = n => n.wire ? clamp((state.day - n.wire.day) / n.wire.set, 0, 1) : 0;
+const wireProgress = n => n.wire ? wireProgressOf(n.wire) : 0;
+// quanto um dia conta para fixar: 1 na primavera e no verão, metade no outono, quase nada no inverno
+const setActivity = () => Math.min(1, growthFactor(state.day) / SP.growthBySeason[1]);
+// dias de crescimento para este trecho fixar: verde fixa mais rápido; galhos grossos demoram um pouco mais
+function wireSetDays(n) {
+  const w = SP.wiring;
+  return Math.round(lerp(w.setGreen, w.setWoody, lignin(n)) + w.setThick * clamp((n.girth * 0.95 - 5) / 15, 0, 1));
+}
 function rotateSubtree(n, q) {
   const v = new THREE.Vector3();
   (function rot(x) { v.set(...x.dir).applyQuaternion(q).normalize(); x.dir = [v.x, v.y, v.z]; x.kids.forEach(rot); })(n);
@@ -1712,7 +1784,7 @@ function startDrag(h) {
   const w = SP.wiring;
   for (let i = from; i <= to; i++) {
     const x = wireChain[i];
-    if (!x.wire) x.wire = { day: state.day, girth0: x.girth, q: [0, 0, 0, 1], set: Math.round(lerp(w.setGreen, w.setWoody, lignin(x))), bitten: false };
+    if (!x.wire) x.wire = { day: state.day, girth0: x.girth, q: [0, 0, 0, 1], set: wireSetDays(x), prog: 0, bitten: false };
   }
   drag = { n, from, to, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), end._e.clone()) };
   controls.enabled = false;
@@ -1731,7 +1803,7 @@ function moveDrag(e) {
   showBendTip(n, e);
 }
 function endDrag() {
-  const n = drag.n;
+  const n = drag.n, { from, to } = drag;
   drag = null;
   controls.enabled = true;
   tipEl.hidden = true;
@@ -1748,6 +1820,14 @@ function endDrag() {
     n.scar = true;
     state.recovery = Math.max(0.15, state.recovery - SP.wiring.crackShock);
     toast('Estalo! A casca rachou na curva, mas o galho aguentou. Vai ficar uma cicatriz.');
+  }
+  // galho deitado (horizontal ou para baixo): a auxina deixa de descer bem e as gemas do trecho acordam.
+  // Só conta quando o galho deita mais do que já tinha deitado com este arame.
+  const a = SP.apical, lying = THREE.MathUtils.radToDeg(spanDir(from, to).angleTo(UP));
+  if (lying > Math.max(a.bendFrom, (n.wire.lowest ?? 0) + 10)) {
+    const woke = releaseApical(wireChain[to], a.bend * clamp((lying - a.bendFrom) / a.bendFull, 0, 1));
+    n.wire.lowest = lying;
+    if (woke) toast(`Galho deitado a ${Math.round(lying)}° da vertical: a dominância da ponta enfraqueceu e ${woke} ${woke === 1 ? 'gema vai' : 'gemas vão'} brotar ao longo dele.`);
   }
   rebuild(); save();
 }
@@ -1849,7 +1929,10 @@ function renderWirePanel() {
     const days = state.day - oldest.wire.day, p = wireProgress(oldest);
     const bitten = wired.some(n => n.wire.bitten);
     const left = Math.max(0, (oldest.wire.girth0 + Math.max(0.65, oldest.wire.girth0 * SP.wiring.bite) - oldest.girth) * 0.95);
-    status = `Arame há ${days} dias · forma ${p >= 1 ? '<b>fixada</b>: pode remover' : `${Math.round(p * 100)}% fixada (~${oldest.wire.set - days} dias)`}`
+    // dias que faltam no ritmo de crescimento de agora (no inverno a fixação quase para)
+    const act = setActivity(), left2 = Math.ceil((1 - p) * oldest.wire.set / Math.max(act, 0.05));
+    status = `Arame há ${days} dias · forma ${p >= 1 ? '<b>fixada</b>: pode remover'
+      : `${Math.round(p * 100)}% fixada (~${left2} dias${act < 0.5 ? ', lenta fora da estação de crescimento' : ''})`}`
       + (bitten ? ' · <span class="warn">⚠️ marcando a casca: remova!</span>'
         : ` · marca a casca se engrossar mais ${fmtLength(left)}`);
   }
