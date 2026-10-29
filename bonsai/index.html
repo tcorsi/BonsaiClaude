@@ -115,6 +115,7 @@
   </div>
   <div class="row tools">
     <button class="icon on" id="toolPrune" title="Ferramenta de poda (tecla P)">✂️</button>
+    <button class="icon" id="toolBranch" title="Remover galho inteiro com corte rente, num clique (tecla R)">🪚</button>
     <button class="icon" id="toolWire" title="Ferramenta de arame: dobrar galhos (tecla A)">🪢</button>
   </div>
 </div>
@@ -1500,6 +1501,11 @@ function pick(e) {
 function planCut(hit) {
   if (hit.root) return { hit, n: hit.n, root: hit.root, removed: new Set() };
   const { n, t } = hit;
+  // galho inteiro: sobe até onde o galho sai do eixo-mãe e corta rente ali (o tronco não sai inteiro)
+  if (tool === 'branch') {
+    const base = branchBase(n);
+    if (base._p) return { hit, n: base, parent: base._p, whole: true, flush: true, removed: collect(base, new Set()) };
+  }
   const parent = findParent(state.root, n);
   if (parent && n.len * t < 2) return { hit, n, parent, whole: true, removed: collect(n, new Set()) };
   const removed = new Set();
@@ -1530,6 +1536,7 @@ function setHover(hit) {
   const size = plan ? plan.removed.size : 0;
   hint.textContent = !plan ? HINT_FOR()
     : plan.root ? (plan.root.grounded ? 'Cortar esta raiz-pilar' : 'Cortar esta raiz aérea')
+    : plan.flush ? `Remover o galho inteiro · corte rente · ${size} ${size === 1 ? 'ramo' : 'ramos'}`
     : size ? `Podar aqui · remove ${size} ${size === 1 ? 'ramo' : 'ramos'}`
     : 'Cortar a ponta deste galho';
   if (changed) { hoverSet = plan ? plan.removed : new Set(); colorBranches(); }
@@ -1561,6 +1568,12 @@ function cut(plan, { undo = true } = {}) {
   if (visibleLeaves) state.recovery = Math.max(0.15, state.recovery - SP.pruneShock * removedLeaves / visibleLeaves);
   if (plan.root) {
     plan.n.aerial.splice(plan.n.aerial.indexOf(plan.root), 1);
+  } else if (plan.flush) {
+    // corte rente com acabamento (alicate côncavo): sem toco, a ferida fecha no colar do galho
+    // e quase não brota ali; o eixo-mãe segue crescendo pela ponta
+    const p = plan.parent;
+    p.kids.splice(p.kids.indexOf(plan.n), 1);
+    releaseApical(p, SP.apical.prune * 0.2);
   } else if (plan.whole) {
     const p = plan.parent;
     const wasApex = p.kids[0] === plan.n;    // cortou a continuação (ponta) do galho, ou só um lateral?
@@ -1951,7 +1964,7 @@ function renderWirePanel() {
   document.getElementById('wireClose').addEventListener('click', () => selectBranch(null));
 }
 
-const toolBtns = { prune: document.getElementById('toolPrune'), wire: document.getElementById('toolWire') };
+const toolBtns = { prune: document.getElementById('toolPrune'), branch: document.getElementById('toolBranch'), wire: document.getElementById('toolWire') };
 function setTool(t) {
   if (t === tool) return;
   tool = t;
@@ -1964,17 +1977,21 @@ function setTool(t) {
   if (t === 'prune' && toolSpeed) { setSpeed(toolSpeed); toolSpeed = null; }
 }
 toolBtns.prune.addEventListener('click', () => setTool('prune'));
+toolBtns.branch.addEventListener('click', () => setTool(tool === 'branch' ? 'prune' : 'branch'));
 toolBtns.wire.addEventListener('click', () => setTool(tool === 'wire' ? 'prune' : 'wire'));
 addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.tagName === 'INPUT') return;
   if (e.key === 'a' || e.key === 'A') setTool(tool === 'wire' ? 'prune' : 'wire');
   if (e.key === 'p' || e.key === 'P') setTool('prune');
+  if (e.key === 'r' || e.key === 'R') setTool(tool === 'branch' ? 'prune' : 'branch');
   if (e.key === 'Escape' && tool === 'wire') selectBranch(null);
   if (tool === 'wire' && wireBase && (e.key === '+' || e.key === '=')) setHandleCount(handleGroup.children.length + 1);
   if (tool === 'wire' && wireBase && e.key === '-') setHandleCount(handleGroup.children.length - 1);
 });
 const HINT_FOR = () => tool === 'wire'
   ? 'Arame: clique num galho · arraste os pontos para dobrar · + / − muda a quantidade de pontos · Esc solta · A volta à poda'
+  : tool === 'branch'
+  ? 'Galho inteiro: clique em qualquer ponto de um galho para removê-lo rente ao eixo · R ou ✂️ volta à poda normal'
   : HINT;
 
 // ---------- Mouse ----------
