@@ -206,8 +206,19 @@ const SPECIES = {
     // Calibrado com um ficus real de semente: ~10 mm de base aos 10 meses, com bons cuidados.
     shootGrowth: 2,          // velocidade de alongamento e de brotação das pontas
     seedling: { start: 0.6, days: 120 },    // plântula começa a 60% da velocidade e chega a 100% em ~4 meses
-    thickening: 0.017,       // anel de crescimento (× RATE × ln(1 + pontas sustentadas) por dia)
-    collarBoost: 6.5,        // reforço no colo do tronco, engrossado também pelas raízes
+    // crescimento secundário pelo modelo de tubos: a madeira nova de cada segmento é proporcional
+    // à área foliar que ele sustenta acima (os açúcares das folhas descem pelo floema e viram anel);
+    // por isso um galho de sacrifício cheio de folhas engrossa tudo o que está abaixo dele
+    thickening: {
+      perLeaf: 0.004,        // anel por unidade de área foliar acima (× RATE ÷ (espessura + girthOffset), por dia)
+      girthOffset: 10,       // somado à espessura no divisor: muda fina não engrossa desproporcionalmente
+      shadeAt: 1500,         // área foliar a partir da qual a copa se sombreia e rende cada vez menos
+      collar: 0.6,           // o colo do tronco engrossa a mais (também pelo sistema de raízes)
+      swellFrom: 1.5,        // lateral com 1,5× a folhagem da continuação começa a inchar a junção
+      swell: 0.5,            // quanto a junção incha (conicidade invertida, típica do sacrifício esquecido)
+      heal: 2.5,             // o calo fecha a ferida ~2,5× mais rápido que o anel normal da madeira
+      woundFrom: 2.5,        // galhos removidos a partir desta espessura (~2,4 mm) deixam cicatriz visível
+    },
     lateralChance: 0.7,      // chance de surgir um galho lateral a cada novo nó (na estrutura principal)
     apicalDominance: 0.18,   // nos galhos finos (nível 4+) a ponta domina e laterais ficam raras
     minInternode: 14,        // comprimento mínimo de um novo entrenó (mm): a ponta sempre consegue avançar
@@ -551,7 +562,10 @@ function stepDay(skipCare = false) {
   nodeCount = countNodes(state.root);
   if (g > 0 && nodeCount > MAX_NODES * 0.85) shedShadedTwigs(skipCare);
   rootCount = 0;
-  grow(state.root, g);
+  const area = grow(state.root, g, true, leafAmount(state.day));
+  // copa densa se sombreia: cada folha a mais rende menos (a área efetiva da árvore satura em shadeAt)
+  const sa = SP.thickening.shadeAt;
+  state.shade = area > 0 ? sa * (1 - Math.exp(-area / sa)) / area : 1;
   state.day++;
 }
 
@@ -685,7 +699,7 @@ function growRoots(n, g) {
   notify('firstRoot', 'Surgiu uma raiz aérea! O ficus forma raízes no ar quando a umidade está alta.');
 }
 
-function grow(n, g, onTrunk = true) {
+function grow(n, g, onTrunk = true, amt = leafAmount(state.day)) {
   n.age++;
   if (g > 0) {
     if (n.len < n.target) {
@@ -712,14 +726,29 @@ function grow(n, g, onTrunk = true) {
   }
   if (g > 0) gravitropicBend(n, g, onTrunk);
   growRoots(n, g);
-  let tips = 0;
   // a linha do tronco continua pela ponta principal (kids[0]); o resto são galhos laterais
-  for (const k of n.kids) tips += grow(k, g, onTrunk && k === n.kids[0]);
-  if (!n.kids.length && !n.stopped) tips = 1;
-  // crescimento secundário: cada ramo ganha um anel de madeira proporcional à folhagem que sustenta
-  // (raminhos finos quase não engrossam; o colo do tronco engrossa também pelo sistema de raízes)
-  const ring = Math.max(0, Math.log1p(tips) - 0.4) + (n.depth === 0 ? SP.collarBoost : 0);
-  if (g > 0) n.girth += SP.thickening * g * RATE * ring;
+  let area = ownLeafArea(n, amt), main = 0, side = 0;
+  n.kids.forEach((k, i) => {
+    const a = grow(k, g, onTrunk && i === 0, amt);
+    area += a;
+    if (i === 0) main = a; else side = Math.max(side, a);
+  });
+  // crescimento secundário (modelo de tubos): madeira nova ∝ folhas acima ÷ espessura que já existe
+  const th = SP.thickening, girth = n.girth + th.girthOffset;
+  const ring = th.perLeaf * area * (state.shade ?? 1) / girth * (n.depth === 0 ? 1 + th.collar : 1);
+  // um lateral com mais folhas que a própria continuação despeja tudo na junção, que incha:
+  // esse inchaço (knot) é local e não desce pelo tronco, então aparece como conicidade invertida
+  const knot = side > main * th.swellFrom ? th.swell * th.perLeaf * (side - main * th.swellFrom) * (state.shade ?? 1) / girth : 0;
+  if (g > 0) {
+    const add = (ring + knot) * g * RATE;
+    n.girth += add;
+    if (knot) n.knot = (n.knot ?? 0) + knot * g * RATE;
+    // o calo cresce das bordas da ferida junto com a madeira nova e vai fechando a cicatriz
+    if (n.wounds?.length) {
+      for (const w of n.wounds) w.r -= th.heal * add * 0.475;
+      n.wounds = n.wounds.filter(w => w.r > 0.15);
+    }
+  }
   // arame esquecido: o galho engrossa por dentro dele e a casca fica marcada
   const w = n.wire;
   // a forma fixa enquanto a madeira se forma: cada dia de crescimento ativo conta (inverno quase não conta)
@@ -729,7 +758,7 @@ function grow(n, g, onTrunk = true) {
     n.scar = true;
     notify('wirebite', 'O arame começou a marcar a casca de um galho! Use a ferramenta 🪢 para ver e remover o arame.');
   }
-  return tips;   // pontas com folhas sustentadas por este ramo
+  return area;   // área foliar sustentada por este ramo
 }
 
 // ramo verde sem arame se curva aos poucos em direção ao alto, levando junto o que sai dele;
@@ -775,7 +804,7 @@ function sprout(n, leader, afterPrune = false) {
 // modelo de "tubos": a espessura de um galho cobre a soma dos filhos
 function calcWidth(n) {
   let s = 0;
-  for (const k of n.kids) { const w = calcWidth(k); s += w * w; }
+  for (const k of n.kids) { const w = calcWidth(k) - (k.knot ?? 0); s += w * w; }
   n.girth = Math.max(n.girth, n.kids.length ? Math.sqrt(s) : 1.3);
   return n.girth;
 }
@@ -805,6 +834,12 @@ function foliageNow() {
   for (const l of leaves) if (leafVisible(l, amt)) a += 6 * (l.len / LEAF_REF) ** 2;
   return a;
 }
+// área foliar que o próprio segmento carrega (mesma conta das folhas desenhadas, sem depender da cena)
+function ownLeafArea(n, amt) {
+  if (!hasLeaves(n) || state.day < (n.leafBack ?? 0)) return 0;
+  const lf = n.lf ?? 1, count = lf < 1 ? lf : (n.kids.length ? 1 : 2);
+  return count * clamp(amt / 0.98, 0, 1) * 6 * ((n.leafLen || LEAF_REF) / LEAF_REF) ** 2;
+}
 function avgLeafLen() {
   const amt = leafAmount(state.day);
   let s = 0, c = 0;
@@ -822,14 +857,17 @@ const ser = n => [n.len, n.target, n.dir, n.depth, n.girth, n.buds, n.age, n.see
   n.wire ? [n.wire.day, n.wire.girth0, n.wire.q, n.wire.set, n.wire.bitten ? 1 : 0, Math.round(wireProgressOf(n.wire) * 1000) / 1000,
     Math.round(n.wire.lowest ?? 0)] : 0,
   n.scar ? 1 : 0, n.lf ?? 1,
-  n.leafLen ? Math.round(n.leafLen * 10) / 10 : 0, n.leafBack ?? 0, n.stretch ? Math.round(n.stretch * 100) / 100 : 0];
+  n.leafLen ? Math.round(n.leafLen * 10) / 10 : 0, n.leafBack ?? 0, n.stretch ? Math.round(n.stretch * 100) / 100 : 0,
+  n.wounds?.length ? n.wounds.map(w => [Math.round(w.r * 100) / 100, Math.round(w.r0 * 100) / 100, w.dir]) : 0,
+  n.knot ? Math.round(n.knot * 100) / 100 : 0];
 const de = a => ({ len: a[0], target: a[1], dir: a[2], depth: a[3], girth: a[4], buds: a[5], age: a[6], seed: a[7],
   phi: a[8], stopped: !!a[9], kids: a[10].map(de),
   aerial: (a[11] ?? []).map(r => ({ d: r[0], ang: r[1], len: r[2], girth: r[3], grounded: !!r[4] })),
   // arames antigos (sem progresso salvo) ganham o tempo de fixação novo do ficus, contado do dia em que foram colocados
   wire: a[12] ? { day: a[12][0], girth0: a[12][1], q: a[12][2], set: a[12][5] === undefined ? Math.min(a[12][3], 60) : a[12][3],
     bitten: !!a[12][4], prog: a[12][5], lowest: a[12][6] || 0 } : null,
-  scar: !!a[13], lf: a[14] ?? 1, leafLen: a[15] || null, leafBack: a[16] || 0, stretch: a[17] || 1 });
+  scar: !!a[13], lf: a[14] ?? 1, leafLen: a[15] || null, leafBack: a[16] || 0, stretch: a[17] || 1,
+  wounds: a[18] ? a[18].map(w => ({ r: w[0], r0: w[1], dir: w[2] })) : undefined, knot: a[19] || 0 });
 
 // Divide um entrenó em k trechos retos iguais (articulações extras para o arame), sem mudar a planta:
 // mesma direção, espessura, idade e nível; folhas repartidas (lf) e a ponta continua no último trecho.
@@ -847,6 +885,12 @@ function splitNode(n, k) {
       leafLen: n.leafLen, leafBack: n.leafBack, stretch: n.stretch };
     pieces[i - 1].kids = [p];
     pieces.push(p);
+  }
+  if (n.wounds) { pieces[k - 1].wounds = n.wounds; delete n.wounds; }
+  if (n.knot) {   // o inchaço é da junção, que agora fica no fim do último trecho
+    const kn = n.knot; n.knot = 0;
+    for (const q of pieces.slice(0, -1)) q.girth -= kn;
+    pieces[k - 1].knot = kn;
   }
   const last = pieces[k - 1];
   Object.assign(last, tip, { kids: origKids, target: Math.max(piece, origTarget - piece * (k - 1)) });
@@ -1016,6 +1060,11 @@ const FALL_MAX = 600;
 const fallMesh = new THREE.InstancedMesh(leafGeo, leafMat, FALL_MAX);
 // raízes aéreas (e a versão invisível mais grossa para o clique)
 const rootMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.75, 1, 1, 6), new THREE.MeshStandardMaterial({ roughness: 0.95 }), MAX_ROOTS);
+const MAX_WOUNDS = 200;
+const woundMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 18), new THREE.MeshStandardMaterial({ roughness: 0.9 }), MAX_WOUNDS);
+woundMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_WOUNDS * 3), 3);   // cor desde o início
+woundMesh.count = 0; woundMesh.frustumCulled = false;
+scene.add(woundMesh);
 const rootPick = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 6), new THREE.MeshBasicMaterial(), MAX_ROOTS);
 rootPick.visible = false;
 // gotas de rega e névoa do borrifador
@@ -1056,11 +1105,14 @@ scene.add(marker);
 
 const radius = n => n.girth * 0.475;   // raio na base do segmento
 // raio no topo do segmento: encontra o ramo mais grosso que sai dali; uma ponta afina até quase nada
+// uma ferida de galho removido mantém a madeira grossa até o corte, até o calo fechar
 function topRadius(n) {
-  const r = radius(n);
-  if (!n.kids.length) return Math.max(r * 0.35, 0.3);
-  return Math.min(r, Math.max(...n.kids.map(radius)));
+  const r = radius(n), wound = Math.max(0, ...(n.wounds ?? []).map(w => w.r));
+  if (!n.kids.length) return Math.max(r * 0.35, 0.3, Math.min(r, wound));
+  return Math.min(r, Math.max(wound, ...n.kids.map(radius)));
 }
+// articulação arredondada no topo; com ferida de galho dominante o topo é um corte plano (só o ramo que segue)
+const jointRadius = n => n.wounds?.length ? Math.min(topRadius(n), Math.max(0.3, ...n.kids.map(radius))) : topRadius(n);
 // raio num ponto do segmento (t = 0 na base, 1 no topo)
 const radiusAt = (n, t) => lerp(radius(n), topRadius(n), t);
 function setColor(mesh, i, c) { mesh.setColorAt(i, tmpColor.setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.SRGBColorSpace)); }
@@ -1096,7 +1148,7 @@ function rebuild() {
     taperAttr.setX(i, topRadius(n) / r);
     tmp.scale.set(Math.max(r, 2.5), Math.max(n.len, 0.5), Math.max(r, 2.5));
     tmp.updateMatrix(); pickMesh.setMatrixAt(i, tmp.matrix);
-    tmp.quaternion.identity(); tmp.position.copy(n._e); tmp.scale.setScalar(topRadius(n));
+    tmp.quaternion.identity(); tmp.position.copy(n._e); tmp.scale.setScalar(jointRadius(n));
     tmp.updateMatrix(); jointMesh.setMatrixAt(i, tmp.matrix);
 
     if (hasLeaves(n)) {
@@ -1155,6 +1207,33 @@ function rebuild() {
   rootMesh.count = rootPick.count = roots.length;
   rootMesh.instanceMatrix.needsUpdate = rootPick.instanceMatrix.needsUpdate = true;
   rootPick.boundingSphere = null;
+
+  // cicatrizes: disco de madeira exposta na junção, apontando para onde estava o galho
+  let wc = 0;
+  for (const n of nodes) for (const w of n.wounds ?? []) {
+    if (wc >= MAX_WOUNDS) break;
+    const d = tmpVec.set(...w.dir), axis = new THREE.Vector3(...n.dir);
+    const lead = n.kids.length ? Math.max(...n.kids.map(radius)) : 0;
+    if (w.r >= lead) {
+      // galho dominante removido (ex.: sacrifício): corte plano no topo do tronco, com o ramo fino ao lado
+      tmp.quaternion.setFromUnitVectors(UP, axis);
+      const off = d.clone().addScaledVector(axis, -d.dot(axis));
+      tmp.position.copy(n._e).addScaledVector(axis, 0.15);
+      if (off.lengthSq() > 1e-4) tmp.position.addScaledVector(off.normalize(), Math.max(0, topRadius(n) - w.r) * 0.9);
+    } else {
+      // lateral menor: a ferida fica na lateral do tronco, virada para onde o galho saía
+      tmp.quaternion.setFromUnitVectors(UP, d);
+      tmp.position.copy(n._e).addScaledVector(d, topRadius(n) * 0.75);
+    }
+    tmp.scale.set(w.r, 0.35, w.r);
+    tmp.updateMatrix(); woundMesh.setMatrixAt(wc, tmp.matrix);
+    // madeira clara recém-cortada escurece e ganha casca conforme fecha
+    setColor(woundMesh, wc, mixColor([196, 160, 112], [92, 74, 58], 1 - w.r / w.r0));
+    wc++;
+  }
+  woundMesh.count = wc;
+  woundMesh.instanceMatrix.needsUpdate = true;
+  if (woundMesh.instanceColor) woundMesh.instanceColor.needsUpdate = true;
 
   if (hoverPlan) {   // a árvore cresceu: refaz o plano de corte com os galhos novos
     hoverPlan = planCut(hoverPlan.hit);
@@ -1558,6 +1637,14 @@ function releaseApical(start, strength) {
   return woke;
 }
 
+// galho grosso removido rente deixa uma ferida do tamanho da base dele, que o calo fecha aos poucos
+function addWound(p, removed) {
+  const r = radius(removed);
+  if (removed.girth < SP.thickening.woundFrom) return;
+  (p.wounds ??= []).push({ r, r0: r, dir: [...removed.dir] });
+  if (r > radius(p) * 0.6) notify('bigWound', 'Corte grande! A cicatriz vai fechando conforme o tronco engrossa: com muita folha acima dela, fecha mais rápido.');
+}
+
 function cut(plan, { undo = true } = {}) {
   if (undo) pushUndo();
   const amt = leafAmount(state.day);
@@ -1573,11 +1660,13 @@ function cut(plan, { undo = true } = {}) {
     // e quase não brota ali; o eixo-mãe segue crescendo pela ponta
     const p = plan.parent;
     p.kids.splice(p.kids.indexOf(plan.n), 1);
+    addWound(p, plan.n);
     releaseApical(p, SP.apical.prune * 0.2);
   } else if (plan.whole) {
     const p = plan.parent;
     const wasApex = p.kids[0] === plan.n;    // cortou a continuação (ponta) do galho, ou só um lateral?
     p.kids.splice(p.kids.indexOf(plan.n), 1);
+    if (!wasApex) addWound(p, plan.n);
     p.stopped = true;                        // a gema da ponta foi removida...
     p.buds = Math.min(4, p.buds + 2);        // ...então gemas laterais vão brotar
     // tirar a ponta libera as gemas ao longo do galho; tirar só um lateral libera bem menos
@@ -1657,6 +1746,8 @@ function showTip(hit, e) {
       ? `<div class="t">Tronco</div>⌀ na base <b>${fmtLength(radius(state.root) * 2)}</b><div class="m">⌀ neste ponto ${here}</div>`
       : `<div class="t">Galho</div>⌀ na base do galho <b>${fmtLength(radius(base) * 2)}</b>`
         + `<div class="m">⌀ neste ponto ${here} · comprimento ${fmtLength(branchLength(base))}</div>`;
+    const w = (hit.n.wounds ?? []).concat(hit.n._p?.wounds ?? [])[0];
+    if (w) html += `<div class="m">cicatriz de ${fmtLength(w.r0 * 2)} · ${Math.round(100 * (1 - w.r / w.r0))}% fechada</div>`;
   }
   tipEl.innerHTML = html;
   tipEl.hidden = false;
@@ -2251,7 +2342,7 @@ updateCare();
 setCamera(VIEWS.home, HOME_TARGET);
 setInterval(save, 5000);
 // exposto para depuração no console
-window.bonsai = { stepDay, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
+window.bonsai = { stepDay, newTree, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
   transplant, pruneRoots, rootFill, potFactor, setSpot, defoliate, avgLeafLen, foliageNow, lightNow,
   get leaves() { return leaves; }, setTool, selectBranch, bendAngle, bendLimit, removeWires,
   get wireChain() { return wireChain; }, get handles() { return handleGroup.children; },
