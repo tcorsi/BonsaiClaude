@@ -227,9 +227,9 @@ const SPECIES = {
     // à área foliar que ele sustenta acima (os açúcares das folhas descem pelo floema e viram anel);
     // por isso um galho de sacrifício cheio de folhas engrossa tudo o que está abaixo dele
     thickening: {
-      perLeaf: 0.012,        // anel por unidade de área foliar acima (× RATE ÷ (espessura + girthOffset), por dia)
+      perLeaf: 0.0095,       // anel por unidade de área foliar acima (× RATE ÷ (espessura + girthOffset), por dia)
       girthOffset: 10,       // somado à espessura no divisor: muda fina não engrossa desproporcionalmente
-      shadeAt: 600,          // área foliar a partir da qual a copa se sombreia: acima disso rende ~ raiz quadrada
+      shadeAt: 350,          // área foliar a partir da qual a copa se sombreia: acima disso rende ~ raiz quadrada
       collar: 0.6,           // o colo do tronco engrossa a mais (também pelo sistema de raízes)
       swellFrom: 1.5,        // lateral com 1,5× a folhagem da continuação começa a inchar a junção
       swell: 0.5,            // quanto a junção incha (conicidade invertida, típica do sacrifício esquecido)
@@ -237,9 +237,17 @@ const SPECIES = {
       woundFrom: 2.5,        // galhos removidos a partir desta espessura (~2,4 mm) deixam cicatriz visível
     },
     lateralChance: 0.7,      // chance de surgir um galho lateral a cada novo nó (na estrutura principal)
-    // idade (dias) em que a ramificação espontânea começa e chega ao normal; antes disso a ponta cresce leaderBoost× mais rápido
-    branching: { from: 90, full: 240, leaderBoost: 1, internode: 0.55 },
-    apicalDominance: 0.06,   // nos galhos finos (nível 4+) o broto do ano só alonga; lateral sem poda é rara
+    // fase juvenil: a muda sobe numa haste única até ~40 cm e só então o tronco solta ramos (primários);
+    // os ramos só começam a ramificar sozinhos a partir de ~1 ano. Podar bifurca em qualquer fase.
+    branching: {
+      height: [350, 450],     // altura do tronco (mm) em que a ramificação começa e chega ao normal
+      matureAge: 730,         // depois dessa idade (dias) a planta é adulta mesmo sem ter passado da altura
+      secondary: [365, 730],  // idade da planta em que galhos começam a soltar galhos sozinhos e chegam ao normal
+      leaderBoost: 2.5,       // na fase juvenil a ponta cresce (1 + leaderBoost)× mais rápido
+      axillary: 0.015,        // muda madura: chance diária (× RATE) de cada nó do tronco soltar um ramo da gema axilar
+      internode: 0.55,        // ... com entrenós mais curtos (folhas próximas)
+    },
+    apicalDominance: 0.06,   // ramo adulto: o broto do ano quase só alonga; lateral sem poda é rara
     minInternode: 14,        // comprimento mínimo de um novo entrenó (mm): a ponta sempre consegue avançar
     maxInternode: 40,        // quanto um entrenó pode se alongar quando a árvore já está muito ramificada
     pruneVigor: 1.4,         // brotos após poda nascem mais vigorosos (entrenós mais longos)
@@ -418,7 +426,8 @@ let state, nodeCount = 0;
 const CARE_DEFAULTS = { water: 0.7, humidity: 0.6, vigor: 1, recovery: 1, waterUse: 0, autoWater: false, flags: {},
   container: 'bonsai', rootMass: 0.6,
   spot: 'sun', leafLoss: 0, defolBoost: 0,     // lugar (luz), folhas caídas por aclimatação, efeito da desfolha
-  foliageAvg: null };                          // média recente da folhagem (equilíbrio raiz/copa)
+  foliageAvg: null,                            // média recente da folhagem (equilíbrio raiz/copa)
+  trunkMax: 0 };                               // maior altura que o tronco já atingiu (fim da fase juvenil)
 
 // ---------- Luz ----------
 const SPOTS = {
@@ -582,8 +591,21 @@ function countNodes(n) { let c = 1; for (const k of n.kids) c += countNodes(k); 
 
 // plantas vindas de semente crescem devagar no primeiro ano
 const juvenile = () => state.origin === 'seed' ? clamp(SP.seedling.start + state.day / SP.seedling.days, 0, 1) : 1;
-// fase juvenil: 0 = plântula de haste única, 1 = ramifica normalmente
-const branchJuv = () => clamp((state.day - SP.branching.from) / (SP.branching.full - SP.branching.from), 0, 1);
+// fase juvenil: 0 = muda de haste única, 1 = adulta (o tronco ramifica). Conta a maior altura já atingida,
+// para uma árvore adulta podada baixa não voltar a ser juvenil
+function branchJuv() {
+  const b = SP.branching;
+  if (state.day >= b.matureAge) return 1;
+  return clamp(((state.trunkMax ?? 0) - b.height[0]) / (b.height[1] - b.height[0]), 0, 1);
+}
+// galhos soltando galhos sozinhos (ramificação secundária): só depois de ~1 ano
+const secondaryBranching = () => clamp((state.day - SP.branching.secondary[0]) / (SP.branching.secondary[1] - SP.branching.secondary[0]), 0, 1);
+// altura do tronco: a linha principal (kids[0]) a partir do colo
+function trunkHeight() {
+  let h = 0;
+  for (let c = state.root; c; c = c.kids[0]) h += c.len * c.dir[1];
+  return h;
+}
 
 function stepDay(skipCare = false) {
   if (!skipCare) stepCare();
@@ -592,6 +614,7 @@ function stepDay(skipCare = false) {
   nodeCount = countNodes(state.root);
   if (g > 0 && nodeCount > MAX_NODES * 0.85) shedShadedTwigs(skipCare);
   rootCount = 0;
+  state.trunkMax = Math.max(state.trunkMax ?? 0, trunkHeight());
   const area = grow(state.root, g, true, leafAmount(state.day));
   // copa densa se sombreia: cada folha a mais rende menos (acima de shadeAt a área efetiva cresce só com a raiz quadrada)
   state.shade = 1 / Math.sqrt(1 + area / SP.thickening.shadeAt);
@@ -739,7 +762,7 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
       if (nodeCount < MAX_NODES) {
         sprout(n, true);
         // fase juvenil: a plântula sobe numa haste única; a ramificação espontânea liga aos poucos
-        const lateral = SP.lateralChance * (onTrunk || n.depth < 4 ? 1 : SP.apicalDominance) * branchJuv();
+        const lateral = onTrunk ? SP.lateralChance * branchJuv() : SP.apicalDominance * secondaryBranching();
         if (Math.random() < lateral) sprout(n, false);
       } else {
         // árvore no limite de galhos: a ponta continua avançando alongando o entrenó
@@ -753,6 +776,10 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
       if (nodeCount < MAX_NODES) sprout(n, false, true, { phi, tilt: rand(a, b) });
       if (nodeCount < MAX_NODES) sprout(n, false, true, { phi: phi + Math.PI + rand(-0.3, 0.3), tilt: rand(a, b) });
     }
+    // muda que passou da fase juvenil: as gemas axilares ao longo do tronco abrem e formam os ramos primários
+    // (só em trechos do tronco com menos de 1 ano: madeira velha não volta a brotar assim)
+    if (onTrunk && n.kids.length === 1 && n.depth >= 3 && n.age > 30 && n.age < 365 && nodeCount < MAX_NODES
+        && Math.random() < SP.branching.axillary * g * RATE * branchJuv()) sprout(n, false);
     // gemas latentes acordam onde houve poda; num toco sem galhos, uma delas pode virar a nova ponta
     // cada gema acordada brota por conta própria (várias podem abrir na mesma época)
     if (n.buds > 0 && n.len >= n.target && n.depth < MAX_DEPTH) {
