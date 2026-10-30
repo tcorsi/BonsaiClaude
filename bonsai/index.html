@@ -26,10 +26,13 @@
   button.on { background: var(--accent); color: #fff; }
   button:disabled { opacity: .4; cursor: default; background: transparent; }
   #speciesBtn { font-weight: 600; }
-  #newMenu { position: fixed; top: 64px; right: 16px; flex-direction: column; align-items: stretch; width: 250px; }
+  #newMenu { position: fixed; top: 64px; right: 16px; flex-direction: column; align-items: stretch; width: 250px; z-index: 30; }
   #newMenu[hidden] { display: none; }
   #newMenu button { text-align: left; display: flex; flex-direction: column; }
   #newMenu small { color: var(--ui-muted); font-size: 12px; }
+  #newMenu hr { border: 0; border-top: 1px solid rgba(0,0,0,.08); margin: 2px 0; }
+  #newMenu .name { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ui-muted); padding: 4px 6px; }
+  #newMenu .name input { font: inherit; font-size: 14px; color: inherit; padding: 5px 7px; border: 1px solid rgba(0,0,0,.15); border-radius: 6px; background: rgba(255,255,255,.7); }
   #speciesCard { position: fixed; top: 72px; left: 16px; width: min(340px, calc(100vw - 32px)); display: block;
     padding: 14px 16px; font-size: 14px; line-height: 1.45; }
   #speciesCard[hidden] { display: none; }
@@ -101,12 +104,17 @@
     <button data-speed="7" title="1 semana por segundo">7×</button>
     <button data-speed="30" title="1 mês por segundo">30×</button>
     <button data-speed="90" title="1 estação a cada segundo">90×</button>
-    <button id="reset" title="Começar uma nova planta">Nova planta ▾</button>
+    <button id="reset" title="Nova planta, salvar ou abrir arquivo de planta">Planta ▾</button>
   </div>
 </div>
 <div class="panel" id="newMenu" hidden>
-  <button data-origin="seed">🌰 Semente<small>Plante e acompanhe a germinação</small></button>
-  <button data-origin="muda">🌱 Muda de 1 ano<small>Já com tronco e alguns galhos</small></button>
+  <label class="name">Nome da planta<input id="plantName" maxlength="40" spellcheck="false"></label>
+  <button id="saveFile">💾 Salvar em arquivo<small>Baixa um arquivo .bonsai.json desta planta</small></button>
+  <button id="openFile">📂 Abrir arquivo<small>Carrega uma planta salva (a atual fica no Desfazer)</small></button>
+  <input type="file" id="fileInput" accept=".json,application/json" hidden>
+  <hr>
+  <button data-origin="seed">🌰 Nova: semente<small>Plante e acompanhe a germinação</small></button>
+  <button data-origin="muda">🌱 Nova: muda de 1 ano<small>Já com tronco e alguns galhos</small></button>
 </div>
 <div class="panel" id="views">
   <canvas id="viewCube" title="Clique numa face para ver daquele lado · arraste para girar"></canvas>
@@ -449,6 +457,7 @@ function newTree(origin = 'muda') {
     ...structuredClone(CARE_DEFAULTS), root: newNode(0, norm([rand(-0.08, 0.08), 1, rand(-0.08, 0.08)]), 55) };
   // a semente vai para um copinho; a muda chega num vaso de cultivo de 1 L com raízes pela metade
   state.container = origin === 'seed' ? 'cup' : 'pot1';
+  state.name = defaultName(origin);
   state.rootMass = origin === 'seed' ? 0.005 : 0.5;
   if (origin === 'muda') for (let i = 0; i < YEAR; i++) stepDay(true);   // muda de 1 ano, bem cuidada
   calcWidth(state.root);
@@ -912,22 +921,28 @@ function splitNode(n, k) {
   return true;
 }
 
+// o save inteiro como objeto: vai para o navegador (autosave) e para os arquivos de planta
+function saveData() {
+  // salva todos os campos de cuidado (CARE_DEFAULTS) automaticamente, para nenhum ficar de fora
+  const care = Object.fromEntries(Object.keys(CARE_DEFAULTS).map(k => [k, state[k]]));
+  const { day, cuts, species, origin, germ, name } = state;
+  return { ...care, name, day, cuts, species, origin, germ, speed, cal: YEAR, root: ser(state.root) };
+}
 function save() {
-  try {
-    // salva todos os campos de cuidado (CARE_DEFAULTS) automaticamente, para nenhum ficar de fora
-    const care = Object.fromEntries(Object.keys(CARE_DEFAULTS).map(k => [k, state[k]]));
-    const { day, cuts, species, origin, germ } = state;
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ ...care, day, cuts, species, origin, germ, speed, cal: YEAR,
-      root: ser(state.root) }));
-  } catch (e) {}
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(saveData())); } catch (e) {}
 }
 function load() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return false;
-    const s = JSON.parse(raw);
-    state = { ...structuredClone(CARE_DEFAULTS), day: s.day, cuts: s.cuts, species: s.species ?? 'ficus-microcarpa',
-      origin: s.origin ?? 'muda', germ: s.germ ?? 0, root: de(s.root) };
+    return raw ? applySave(JSON.parse(raw)) : false;
+  } catch (e) { return false; }
+}
+// monta o estado a partir de um save (do navegador ou de um arquivo); lança erro se não for um save válido
+function applySave(s) {
+  if (!s || !Array.isArray(s.root) || typeof s.day !== 'number') throw new Error('arquivo não é uma planta');
+  {
+    state = { ...structuredClone(CARE_DEFAULTS), day: s.day, cuts: s.cuts ?? 0, species: s.species ?? 'ficus-microcarpa',
+      origin: s.origin ?? 'muda', germ: s.germ ?? 0, name: s.name || defaultName(s.origin), root: de(s.root) };
     for (const k of Object.keys(CARE_DEFAULTS)) if (s[k] !== undefined) state[k] = s[k];
     SP = SPECIES[state.species] ?? SPECIES['ficus-microcarpa'];
     // saves do calendário antigo (120 dias/ano): converte a data e a idade dos ramos
@@ -939,8 +954,9 @@ function load() {
     speed = [0, 1, 7, 30, 90].includes(s.speed) ? s.speed : 7;
     calcWidth(state.root);
     return true;
-  } catch (e) { return false; }
+  }
 }
+const defaultName = origin => origin === 'seed' ? 'Ficus de semente' : 'Ficus de muda';
 
 // ---------- Cena 3D ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -1559,7 +1575,7 @@ cubeCanvas.addEventListener('pointerup', e => {
 cubeCanvas.addEventListener('pointerleave', () => { if (!cubeDrag) cubeHover = -1; });
 leafToggle.addEventListener('click', toggleLeaves);
 addEventListener('keydown', e => {
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.tagName === 'INPUT') return;
   if (e.key === 'h' || e.key === 'H' || e.key === 'Home') goToView('home');
   if (e.key === 'f' || e.key === 'F') toggleLeaves();
 });
@@ -1713,7 +1729,7 @@ function cut(plan, { undo = true } = {}) {
 const undoStack = [];
 const undoBtn = document.getElementById('undo');
 function pushUndo() {
-  undoStack.push({ day: state.day, cuts: state.cuts, origin: state.origin, germ: state.germ, recovery: state.recovery,
+  undoStack.push({ name: state.name, day: state.day, cuts: state.cuts, origin: state.origin, germ: state.germ, recovery: state.recovery,
     container: state.container, rootMass: state.rootMass, root: ser(state.root) });
   if (undoStack.length > 30) undoStack.shift();
   undoBtn.disabled = false;
@@ -1721,7 +1737,7 @@ function pushUndo() {
 function undo() {
   const u = undoStack.pop();
   if (!u) return;
-  Object.assign(state, { day: u.day, cuts: u.cuts, origin: u.origin, germ: u.germ, recovery: u.recovery ?? 1,
+  Object.assign(state, { name: u.name ?? state.name, day: u.day, cuts: u.cuts, origin: u.origin, germ: u.germ, recovery: u.recovery ?? 1,
     container: u.container ?? state.container, rootMass: u.rootMass ?? state.rootMass, root: de(u.root) });
   calcWidth(state.root);
   applyContainer();
@@ -1730,7 +1746,7 @@ function undo() {
   undoBtn.disabled = !undoStack.length;
 }
 undoBtn.addEventListener('click', undo);
-addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); } });
+addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && e.target.tagName !== 'INPUT') { e.preventDefault(); undo(); } });
 
 // um clique sem arrastar poda; arrastar gira a câmera
 const hint = document.getElementById('hint');
@@ -2213,7 +2229,43 @@ function togglePause() {
 }
 speedBtns.forEach(b => b.addEventListener('click', () => setSpeed(+b.dataset.speed)));
 const newMenu = document.getElementById('newMenu');
-document.getElementById('reset').addEventListener('click', () => newMenu.hidden = !newMenu.hidden);
+const plantName = document.getElementById('plantName');
+document.getElementById('reset').addEventListener('click', () => { plantName.value = state.name ?? ''; newMenu.hidden = !newMenu.hidden; });
+plantName.addEventListener('input', () => { state.name = plantName.value.trim() || defaultName(state.origin); updateHud(); save(); });
+
+// arquivos de planta: um .bonsai.json por planta, com nome e dia no nome do arquivo
+const slug = t => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'planta';
+document.getElementById('saveFile').addEventListener('click', () => {
+  const data = { format: 'bonsai-simulador', version: 1, savedAt: new Date().toISOString(), ...saveData() };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
+  a.download = `${slug(state.name ?? 'planta')}-dia-${state.day + 1}.bonsai.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  newMenu.hidden = true;
+  toast(`Planta "${state.name}" salva em ${a.download} (pasta de downloads).`);
+});
+const fileInput = document.getElementById('fileInput');
+document.getElementById('openFile').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', async () => {
+  const file = fileInput.files[0];
+  fileInput.value = '';
+  if (!file) return;
+  newMenu.hidden = true;
+  const prev = state;
+  try {
+    pushUndo();
+    applySave(JSON.parse(await file.text()));
+  } catch (e) {
+    state = prev; undoStack.pop(); undoBtn.disabled = !undoStack.length;
+    toast(`Não consegui abrir "${file.name}": não parece um arquivo de planta deste simulador.`);
+    return;
+  }
+  applyContainer(); setSpeed(0);
+  falling = []; drops = []; prevLeafAmt = null; setHover(null); selectBranch(null);
+  rebuild(); updateHud(); updateCare(); renderSpecies(); save();
+  toast(`Planta "${state.name}" carregada (dia ${state.day + 1}). Tempo pausado. Use Desfazer para voltar à anterior.`);
+});
 newMenu.querySelectorAll('[data-origin]').forEach(b => b.addEventListener('click', () => {
   newMenu.hidden = true;
   pushUndo();
@@ -2352,7 +2404,7 @@ function updateHud() {
   const s = seasonOf(state.day);
   const year = Math.floor(state.day / YEAR) + 1;
   const day = Math.floor(dayOfYear(state.day) - s * SEASON_LEN) + 1;   // 1 a 91/92
-  const age = `Ano ${year} · ${state.day + 1}º dia`;
+  const age = `${state.name ? state.name + ' · ' : ''}Ano ${year} · ${state.day + 1}º dia`;
   const detail = state.germ > 0 ? `${age} · semente germinando…` : `${age} · ${state.cuts} ${state.cuts === 1 ? 'poda' : 'podas'}`;
   document.getElementById('date').innerHTML = `${SEASON_ICON[s]} ${SEASONS[s]} · dia ${day}<small>${detail}</small>`;
 
