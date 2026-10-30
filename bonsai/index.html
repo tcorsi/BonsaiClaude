@@ -227,9 +227,9 @@ const SPECIES = {
     // à área foliar que ele sustenta acima (os açúcares das folhas descem pelo floema e viram anel);
     // por isso um galho de sacrifício cheio de folhas engrossa tudo o que está abaixo dele
     thickening: {
-      perLeaf: 0.004,        // anel por unidade de área foliar acima (× RATE ÷ (espessura + girthOffset), por dia)
+      perLeaf: 0.012,        // anel por unidade de área foliar acima (× RATE ÷ (espessura + girthOffset), por dia)
       girthOffset: 10,       // somado à espessura no divisor: muda fina não engrossa desproporcionalmente
-      shadeAt: 1500,         // área foliar a partir da qual a copa se sombreia e rende cada vez menos
+      shadeAt: 600,          // área foliar a partir da qual a copa se sombreia: acima disso rende ~ raiz quadrada
       collar: 0.6,           // o colo do tronco engrossa a mais (também pelo sistema de raízes)
       swellFrom: 1.5,        // lateral com 1,5× a folhagem da continuação começa a inchar a junção
       swell: 0.5,            // quanto a junção incha (conicidade invertida, típica do sacrifício esquecido)
@@ -237,6 +237,8 @@ const SPECIES = {
       woundFrom: 2.5,        // galhos removidos a partir desta espessura (~2,4 mm) deixam cicatriz visível
     },
     lateralChance: 0.7,      // chance de surgir um galho lateral a cada novo nó (na estrutura principal)
+    // idade (dias) em que a ramificação espontânea começa e chega ao normal; antes disso a ponta cresce leaderBoost× mais rápido
+    branching: { from: 90, full: 240, leaderBoost: 1, internode: 0.55 },
     apicalDominance: 0.06,   // nos galhos finos (nível 4+) o broto do ano só alonga; lateral sem poda é rara
     minInternode: 14,        // comprimento mínimo de um novo entrenó (mm): a ponta sempre consegue avançar
     maxInternode: 40,        // quanto um entrenó pode se alongar quando a árvore já está muito ramificada
@@ -574,6 +576,8 @@ function countNodes(n) { let c = 1; for (const k of n.kids) c += countNodes(k); 
 
 // plantas vindas de semente crescem devagar no primeiro ano
 const juvenile = () => state.origin === 'seed' ? clamp(SP.seedling.start + state.day / SP.seedling.days, 0, 1) : 1;
+// fase juvenil: 0 = plântula de haste única, 1 = ramifica normalmente
+const branchJuv = () => clamp((state.day - SP.branching.from) / (SP.branching.full - SP.branching.from), 0, 1);
 
 function stepDay(skipCare = false) {
   if (!skipCare) stepCare();
@@ -583,9 +587,8 @@ function stepDay(skipCare = false) {
   if (g > 0 && nodeCount > MAX_NODES * 0.85) shedShadedTwigs(skipCare);
   rootCount = 0;
   const area = grow(state.root, g, true, leafAmount(state.day));
-  // copa densa se sombreia: cada folha a mais rende menos (a área efetiva da árvore satura em shadeAt)
-  const sa = SP.thickening.shadeAt;
-  state.shade = area > 0 ? sa * (1 - Math.exp(-area / sa)) / area : 1;
+  // copa densa se sombreia: cada folha a mais rende menos (acima de shadeAt a área efetiva cresce só com a raiz quadrada)
+  state.shade = 1 / Math.sqrt(1 + area / SP.thickening.shadeAt);
   state.day++;
 }
 
@@ -722,12 +725,15 @@ function growRoots(n, g) {
 function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) {
   n.age++;
   if (g > 0) {
+    // a plântula sem ramos concentra a força na ponta e sobe mais rápido
+    const lead = 1 + SP.branching.leaderBoost * (1 - branchJuv());
     if (n.len < n.target) {
-      n.len = Math.min(n.target, n.len + n.target * 0.13 * SP.shootGrowth * g * RATE * juvenile());
-    } else if (!n.kids.length && !n.stopped && n.depth < MAX_DEPTH && Math.random() < 0.35 * SP.shootGrowth * g * RATE) {
+      n.len = Math.min(n.target, n.len + n.target * 0.13 * SP.shootGrowth * g * RATE * juvenile() * lead);
+    } else if (!n.kids.length && !n.stopped && n.depth < MAX_DEPTH && Math.random() < 0.35 * SP.shootGrowth * g * RATE * lead) {
       if (nodeCount < MAX_NODES) {
         sprout(n, true);
-        const lateral = SP.lateralChance * (n.depth < 4 ? 1 : SP.apicalDominance);
+        // fase juvenil: a plântula sobe numa haste única; a ramificação espontânea liga aos poucos
+        const lateral = SP.lateralChance * (onTrunk || n.depth < 4 ? 1 : SP.apicalDominance) * branchJuv();
         if (Math.random() < lateral) sprout(n, false);
       } else {
         // árvore no limite de galhos: a ponta continua avançando alongando o entrenó
@@ -828,7 +834,9 @@ function sprout(n, leader, afterPrune = false) {
   // pouca luz: entrenós longos (estiolamento). O alongamento vale para este entrenó, sem se acumular nos próximos
   const stretch = 1 + SP.light.stretch * (1 - lightNow());
   const base = n.target / (n.stretch ?? 1);
-  const target = Math.max(base * (leader ? rand(0.74, 0.86) : rand(0.6, 0.78)), min * rand(0.9, 1.15)) * stretch;
+  // plântula: entrenós curtos (folhas próximas), que se alongam ao normal quando a planta passa a ramificar
+  const juvLen = lerp(SP.branching.internode, 1, branchJuv());
+  const target = Math.max(base * (leader ? rand(0.74, 0.86) : rand(0.6, 0.78)), min * rand(0.9, 1.15)) * stretch * juvLen;
   const kid = newNode(n.depth + 1, norm(dir), target);
   kid.dep = Math.acos(clamp(dot(kid.dir, d), -1, 1));   // ângulo com que nasceu em relação ao ramo de origem
   kid.stretch = stretch;
