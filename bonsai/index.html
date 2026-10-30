@@ -207,9 +207,9 @@ const SPECIES = {
       // madeira velha: casca grossa, gemas dormentes mais fundas e mais raras. O ficus ainda brota nela
       // (por isso aguenta podas drásticas), mas bem menos e mais devagar que num ramo novo
       oldWood: 0.15,          // fator de brotação na madeira mais velha (espécies que não brotam: ~0)
-      matureDays: 120,        // até essa idade (ramo verde/novo) brota com facilidade total
-      oldDays: 900,           // a partir dessa idade vale o fator oldWood
-      budAbort: 0.01,         // por dia: gema em madeira velha que não brotou pode voltar a dormir
+      matureDays: 60,         // até essa idade (ramo verde/novo) brota com facilidade total
+      oldDays: 540,           // a partir dessa idade (~1,5 ano) vale o fator oldWood
+      budAbort: 0.03,         // por dia: gema em madeira velha que não brotou pode voltar a dormir
     },
     // Calibrado com um ficus real de semente: ~10 mm de base aos 10 meses, com bons cuidados.
     shootGrowth: 2,          // velocidade de alongamento e de brotação das pontas
@@ -228,7 +228,7 @@ const SPECIES = {
       woundFrom: 2.5,        // galhos removidos a partir desta espessura (~2,4 mm) deixam cicatriz visível
     },
     lateralChance: 0.7,      // chance de surgir um galho lateral a cada novo nó (na estrutura principal)
-    apicalDominance: 0.18,   // nos galhos finos (nível 4+) a ponta domina e laterais ficam raras
+    apicalDominance: 0.06,   // nos galhos finos (nível 4+) o broto do ano só alonga; lateral sem poda é rara
     minInternode: 14,        // comprimento mínimo de um novo entrenó (mm): a ponta sempre consegue avançar
     maxInternode: 40,        // quanto um entrenó pode se alongar quando a árvore já está muito ramificada
     pruneVigor: 1.4,         // brotos após poda nascem mais vigorosos (entrenós mais longos)
