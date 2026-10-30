@@ -189,6 +189,7 @@ const mixColor = (c1, c2, t) => c1.map((v, i) => lerp(v, c2[i], t));
 const rgb = c => `rgb(${c.map(Math.round).join(',')})`;
 const norm = v => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 // ---------- Espécies ----------
 // Características botânicas que guiam a simulação. Novas espécies entram aqui.
@@ -244,8 +245,10 @@ const SPECIES = {
     pruneRecovery: 0.012,    // recuperação diária do choque de poda (poda de 40% no verão: ~3 semanas)
     // gravitropismo: ramos jovens e brotos novos procuram o alto; madeira e trechos aramados ficam como estão
     gravitropism: {
-      shoot: 0.3,             // inclinação para cima de cada broto novo
-      downBoost: 0.6,         // reforço quando o ramo de onde ele sai aponta para baixo
+      shoot: 0.15,            // inclinação para cima de cada broto/entrenó novo (somada a cada nó, faz a curva)
+      downBoost: 0.2,         // reforço quando o ramo de onde ele sai aponta para baixo
+      jointMax: 20,           // graus que cada junção pode se curvar além do ângulo com que nasceu:
+                              // a subida se espalha pelos entrenós numa curva suave, em vez de um V na base
       bendRate: 3,            // graus por dia que um ramo verde se curva para cima (cai a 0 ao lignificar)
       // ângulo de equilíbrio (graus a partir da vertical): o tronco busca o alto; um galho lateral
       // só sobe quando está mais caído que isso (por exemplo, apontando para baixo)
@@ -716,7 +719,7 @@ function growRoots(n, g) {
   notify('firstRoot', 'Surgiu uma raiz aérea! O ficus forma raízes no ar quando a umidade está alta.');
 }
 
-function grow(n, g, onTrunk = true, amt = leafAmount(state.day)) {
+function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) {
   n.age++;
   if (g > 0) {
     if (n.len < n.target) {
@@ -744,12 +747,12 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day)) {
       }
     }
   }
-  if (g > 0) gravitropicBend(n, g, onTrunk);
+  if (g > 0) gravitropicBend(n, g, onTrunk, parent);
   growRoots(n, g);
   // a linha do tronco continua pela ponta principal (kids[0]); o resto são galhos laterais
   let area = ownLeafArea(n, amt), main = 0, side = 0;
   n.kids.forEach((k, i) => {
-    const a = grow(k, g, onTrunk && i === 0, amt);
+    const a = grow(k, g, onTrunk && i === 0, amt, n);
     area += a;
     if (i === 0) main = a; else side = Math.max(side, a);
   });
@@ -784,7 +787,7 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day)) {
 // ramo verde sem arame se curva aos poucos em direção ao alto, levando junto o que sai dele;
 // ao lignificar perde a capacidade (a madeira só muda de forma com arame)
 const GRAVI_UP = new THREE.Vector3(0, 1, 0);
-function gravitropicBend(n, g, onTrunk) {
+function gravitropicBend(n, g, onTrunk, parent) {
   if (n.wire) return;   // o arame segura a posição
   const green = 1 - clamp(n.age / SP.wiring.lignifyDays, 0, 1);
   if (green <= 0) return;
@@ -793,8 +796,20 @@ function gravitropicBend(n, g, onTrunk) {
   if (excess <= 0) return;
   let axis = new THREE.Vector3().crossVectors(d, GRAVI_UP);
   if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);   // apontando reto para baixo: escolhe um lado
-  const step = Math.min(excess, THREE.MathUtils.degToRad(gt.bendRate * green * g));
-  rotateSubtree(n, new THREE.Quaternion().setFromAxisAngle(axis.normalize(), step));
+  let step = Math.min(excess, THREE.MathUtils.degToRad(gt.bendRate * green * g));
+  const q = new THREE.Quaternion().setFromAxisAngle(axis.normalize(), step);
+  if (parent) {
+    // a junção com o ramo de origem só curva até jointMax além do ângulo de nascimento;
+    // o resto da subida fica para os entrenós seguintes (curva suave)
+    const pd = new THREE.Vector3(...parent.dir), now = d.angleTo(pd);
+    n.dep ??= now;
+    const after = d.clone().applyQuaternion(q).angleTo(pd), limit = n.dep + THREE.MathUtils.degToRad(gt.jointMax);
+    if (after > now && after > limit) {
+      if (now >= limit) return;
+      q.setFromAxisAngle(axis, step * (limit - now) / (after - now));
+    }
+  }
+  rotateSubtree(n, q);
 }
 
 function sprout(n, leader, afterPrune = false) {
@@ -815,6 +830,7 @@ function sprout(n, leader, afterPrune = false) {
   const base = n.target / (n.stretch ?? 1);
   const target = Math.max(base * (leader ? rand(0.74, 0.86) : rand(0.6, 0.78)), min * rand(0.9, 1.15)) * stretch;
   const kid = newNode(n.depth + 1, norm(dir), target);
+  kid.dep = Math.acos(clamp(dot(kid.dir, d), -1, 1));   // ângulo com que nasceu em relação ao ramo de origem
   kid.stretch = stretch;
   kid.leafLen = leafSizeFor(kid);   // o tamanho da folha é definido quando ela abre
   n.kids.push(kid);
