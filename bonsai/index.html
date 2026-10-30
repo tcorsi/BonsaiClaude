@@ -33,6 +33,13 @@
   #newMenu hr { border: 0; border-top: 1px solid rgba(0,0,0,.08); margin: 2px 0; }
   #newMenu .name { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ui-muted); padding: 4px 6px; }
   #newMenu .name input { font: inherit; font-size: 14px; color: inherit; padding: 5px 7px; border: 1px solid rgba(0,0,0,.15); border-radius: 6px; background: rgba(255,255,255,.7); }
+  #deathCard { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 40; display: block;
+    width: min(380px, calc(100vw - 32px)); padding: 18px 20px; text-align: center; }
+  #deathCard[hidden] { display: none; }
+  #deathCard h2 { margin: 0 0 8px; font-size: 18px; }
+  #deathCard p { margin: 0 0 14px; color: var(--ui-muted); font-size: 14px; line-height: 1.4; }
+  #deathCard .row { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+  #deathCard .link { margin-top: 10px; background: none; color: var(--ui-muted); font-size: 13px; }
   #speciesCard { position: fixed; top: 72px; left: 16px; width: min(340px, calc(100vw - 32px)); display: block;
     padding: 14px 16px; font-size: 14px; line-height: 1.45; }
   #speciesCard[hidden] { display: none; }
@@ -129,6 +136,16 @@
   </div>
 </div>
 <div class="panel" id="speciesCard" hidden></div>
+<div class="panel" id="deathCard" hidden>
+  <h2>🥀 A planta morreu</h2>
+  <p id="deathText"></p>
+  <div class="row">
+    <button id="deathOpen">📂 Abrir arquivo</button>
+    <button id="deathSeed">🌰 Nova semente</button>
+    <button id="deathMuda">🌱 Nova muda</button>
+  </div>
+  <button id="deathClose" class="link">Só olhar</button>
+</div>
 <div class="panel" id="care">
   <div id="potName"></div>
   <div class="meter"><span>🪴 Raízes</span><div class="bar"><i id="mRoots"></i></div><em id="tRoots"></em></div>
@@ -315,6 +332,15 @@ const SPECIES = {
       perLeaf: 0.00009,       // transpiração diária por unidade de área foliar (copa adulta no verão seca o vaso em ~3-4 dias)
       ideal: [0.3, 0.8],      // gosta de terra úmida, mas não encharcada
     },
+    // saúde: cai com a terra seca (e devagar com encharcamento constante); em zero a planta morre.
+    // O ficus aguenta alguns dias seco, solta as folhas para economizar água e rebrota se for regado a tempo.
+    health: {
+      wilt: 0.08,             // terra abaixo disso: murcha, para de crescer e perde saúde
+      dry: 0.045,             // perda diária de saúde na terra seca (× calor: ~4 semanas sem rega no verão, ~2 meses no inverno)
+      rot: 0.003,             // perda diária com a terra encharcada (raízes apodrecem em alguns meses)
+      recover: 0.012,         // recuperação diária com água boa (× estação de crescimento)
+      leafFrom: 0.7,          // abaixo dessa saúde as folhas vão caindo (todas caem em zero)
+    },
     germination: {
       days: 12,               // dias de calor e terra úmida até a semente brotar
       minWater: 0.3,
@@ -408,7 +434,8 @@ function leafFall(d) {          // 0 = copa cheia, 1 = todas as folhas que caem 
 }
 // árvore com pouco vigor (seca ou encharcada) perde parte das folhas
 const leafAmount = d => (1 - SP.leafDrop * leafFall(d)) * (0.45 + 0.55 * clamp(state.vigor / 0.7, 0, 1))
-  * (1 - state.leafLoss);   // folhas caídas ao mudar para um lugar mais escuro
+  * (1 - state.leafLoss)    // folhas caídas ao mudar para um lugar mais escuro
+  * clamp((state.health ?? 1) / SP.health.leafFrom, 0, 1);   // seca: a planta solta as folhas para não perder água
 const autumnTint = d => clamp((yearFrac(d) - 0.46) / 0.21, 0, 1);
 const springFresh = d => clamp(1 - yearFrac(d) / 0.29, 0, 1);
 
@@ -427,7 +454,8 @@ const CARE_DEFAULTS = { water: 0.7, humidity: 0.6, vigor: 1, recovery: 1, waterU
   container: 'bonsai', rootMass: 0.6,
   spot: 'sun', leafLoss: 0, defolBoost: 0,     // lugar (luz), folhas caídas por aclimatação, efeito da desfolha
   foliageAvg: null,                            // média recente da folhagem (equilíbrio raiz/copa)
-  trunkMax: 0 };                               // maior altura que o tronco já atingiu (fim da fase juvenil)
+  trunkMax: 0,                                 // maior altura que o tronco já atingiu (fim da fase juvenil)
+  health: 1, dead: false, deathCause: null };  // saúde (seca/encharcamento); morta não cresce mais
 
 // ---------- Luz ----------
 const SPOTS = {
@@ -591,6 +619,8 @@ function countNodes(n) { let c = 1; for (const k of n.kids) c += countNodes(k); 
 
 // plantas vindas de semente crescem devagar no primeiro ano
 const juvenile = () => state.origin === 'seed' ? clamp(SP.seedling.start + state.day / SP.seedling.days, 0, 1) : 1;
+// terra seca para o crescimento (estômatos fechados); saúde baixa também
+const waterGrowth = () => clamp((state.water - SP.health.wilt) / (SP.water.ideal[0] - SP.health.wilt), 0, 1) * (state.health ?? 1);
 // fase juvenil: 0 = muda de haste única, 1 = adulta (o tronco ramifica). Conta a maior altura já atingida,
 // para uma árvore adulta podada baixa não voltar a ser juvenil
 function branchJuv() {
@@ -610,7 +640,8 @@ function trunkHeight() {
 function stepDay(skipCare = false) {
   if (!skipCare) stepCare();
   if (state.germ > 0) { stepGermination(); state.day++; return; }
-  const g = growthFactor(state.day) * vigorNow() * potFactor() * lightGrowth();
+  if (state.dead) { state.day++; return; }   // morta: o tempo passa, mas nada cresce
+  const g = growthFactor(state.day) * vigorNow() * potFactor() * lightGrowth() * waterGrowth();
   nodeCount = countNodes(state.root);
   if (g > 0 && nodeCount > MAX_NODES * 0.85) shedShadedTwigs(skipCare);
   rootCount = 0;
@@ -657,6 +688,7 @@ function stepGermination() {
 
 // ---------- Água, umidade e vigor ----------
 function stepCare() {
+  if (state.dead) return;
   const s = seasonOf(state.day);
   // a planta bebe mais no calor e quanto maior a copa
   // água sai por evaporação da terra e, principalmente, pela transpiração das folhas:
@@ -684,10 +716,30 @@ function stepCare() {
 
   const [lo, hi] = SP.water.ideal, w = state.water;
   const dv = w < 0.08 ? -0.035 : w < lo ? -0.005 : w > 0.95 ? -0.012 : w > hi ? 0.005 : 0.03;
-  state.vigor = clamp(state.vigor + dv, 0.15, 1);   // relaxante: a árvore sofre, mas não morre
+  state.vigor = clamp(state.vigor + dv, 0.15, 1);
+  stepHealth(heat, w);
 
   if (w < 0.12) notify('drought', 'A terra está seca. Regue o ficus antes que ele perca folhas.');
   if (w > 0.95) notify('soggy', 'Terra encharcada: espere secar um pouco antes de regar de novo.');
+}
+
+// saúde: a terra seca mata devagar; regar a tempo recupera (sem folhas, a planta rebrota)
+function stepHealth(heat, w) {
+  const H = SP.health, before = state.health;
+  if (container().volume !== Infinity && w < H.wilt) state.health -= H.dry * heat;
+  else if (w > 0.95) state.health -= H.rot;
+  else state.health = Math.min(1, state.health + H.recover * (0.3 + growthFactor(state.day)));
+  if (state.health <= 0) { die(w < H.wilt ? 'seca' : 'encharcamento'); return; }
+  if (state.health < 0.7 && before >= 0.7) notify('wilting', w < H.wilt
+    ? 'O ficus está murchando de sede e começou a soltar as folhas. Regue logo!'
+    : 'As raízes estão sofrendo com a terra encharcada. Deixe secar antes de regar de novo.', true);
+  if (state.health < 0.3 && before >= 0.3) notify('dying', 'A planta está morrendo! Sem folhas e com as raízes secando: regue agora para ela ainda rebrotar.', true);
+}
+function die(cause) {
+  state.health = 0; state.dead = true; state.deathCause = cause;
+  setSpeed(0);
+  showDeath();
+  save();
 }
 
 function water(auto = false) {
@@ -1220,7 +1272,7 @@ function leafColor(n, i, d) {
   if (th > 1 - SP.leafDrop)
     c = mixColor(c, SP.leaf.autumn[Math.floor(s2 * SP.leaf.autumn.length)], clamp(autumnTint(d) * 1.4 - s2 * 0.4, 0, 1));
   // falta de vigor amarela parte das folhas
-  const stress = clamp((0.8 - state.vigor) / 0.5, 0, 1);
+  const stress = Math.max(clamp((0.8 - state.vigor) / 0.5, 0, 1), clamp((0.95 - (state.health ?? 1)) / 0.5, 0, 1));
   if (stress > 0) c = mixColor(c, SP.leaf.stress, stress * (0.3 + s2 * 0.6));
   return hoverSet.has(n) ? mixColor(c, HIGHLIGHT, 0.65) : c;
 }
@@ -1353,10 +1405,14 @@ function attachPoint(n, r) {
     .add(new THREE.Vector3(Math.cos(r.ang) * rad, 0, Math.sin(r.ang) * rad));
 }
 
+const DRY_SHOOT = [120, 98, 70], DEAD_WOOD = [128, 122, 112];
 function colorBranches() {
   nodes.forEach((n, i) => {
     let c = mixColor(SP.bark, SP.shoot, clamp(1 - n.age / 120, 0, 1));   // ramos verdes lignificam em ~4 meses
     if (n.scar) c = mixColor(c, [78, 62, 50], 0.4);                      // cicatriz de arame ou rachadura
+    const h = state.dead ? 0 : state.health ?? 1;
+    if (h < 0.5) c = mixColor(c, DRY_SHOOT, (0.5 - h) * 2 * clamp(1 - n.age / 120, 0, 1));   // brotos verdes secam
+    if (state.dead) c = mixColor(c, DEAD_WOOD, 0.55);                    // madeira morta, acinzentada
     if (wireSet.has(n)) c = mixColor(c, WIRE_SELECT, 0.6);               // galho selecionado no modo arame
     if (hoverSet.has(n)) c = HIGHLIGHT;
     setColor(branchMesh, i, c); setColor(jointMesh, i, c);
@@ -1804,7 +1860,7 @@ function cut(plan, { undo = true } = {}) {
 const undoStack = [];
 const undoBtn = document.getElementById('undo');
 function pushUndo() {
-  undoStack.push({ name: state.name, day: state.day, cuts: state.cuts, origin: state.origin, germ: state.germ, recovery: state.recovery,
+  undoStack.push({ health: state.health, dead: state.dead, deathCause: state.deathCause, name: state.name, day: state.day, cuts: state.cuts, origin: state.origin, germ: state.germ, recovery: state.recovery,
     container: state.container, rootMass: state.rootMass, root: ser(state.root) });
   if (undoStack.length > 30) undoStack.shift();
   undoBtn.disabled = false;
@@ -1812,12 +1868,13 @@ function pushUndo() {
 function undo() {
   const u = undoStack.pop();
   if (!u) return;
-  Object.assign(state, { name: u.name ?? state.name, day: u.day, cuts: u.cuts, origin: u.origin, germ: u.germ, recovery: u.recovery ?? 1,
+  Object.assign(state, { health: u.health ?? 1, dead: !!u.dead, deathCause: u.deathCause ?? null, name: u.name ?? state.name, day: u.day, cuts: u.cuts, origin: u.origin, germ: u.germ, recovery: u.recovery ?? 1,
     container: u.container ?? state.container, rootMass: u.rootMass ?? state.rootMass, root: de(u.root) });
   calcWidth(state.root);
   applyContainer();
   falling = []; prevLeafAmt = null;
-  setHover(null); rebuild(); updateHud(); save();
+  setHover(null); rebuild(); updateHud(); updateCare(); save();
+  deathCard.hidden = !state.dead;
   undoBtn.disabled = !undoStack.length;
 }
 undoBtn.addEventListener('click', undo);
@@ -2339,10 +2396,11 @@ fileInput.addEventListener('change', async () => {
   applyContainer(); setSpeed(0);
   falling = []; drops = []; prevLeafAmt = null; setHover(null); selectBranch(null);
   rebuild(); updateHud(); updateCare(); renderSpecies(); save();
+  deathCard.hidden = !state.dead;
   toast(`Planta "${state.name}" carregada (dia ${state.day + 1}). Tempo pausado. Use Desfazer para voltar à anterior.`);
 });
 newMenu.querySelectorAll('[data-origin]').forEach(b => b.addEventListener('click', () => {
-  newMenu.hidden = true;
+  newMenu.hidden = true; deathCard.hidden = true;
   pushUndo();
   newTree(b.dataset.origin);
   applyContainer();
@@ -2351,6 +2409,19 @@ newMenu.querySelectorAll('[data-origin]').forEach(b => b.addEventListener('click
     ? 'Semente plantada. Mantenha a terra úmida e ela germina em alguns dias. Use Desfazer para voltar à árvore anterior.'
     : 'Nova muda plantada. Use Desfazer para voltar à árvore anterior.');
 }));
+
+// morte: explica a causa e oferece recomeçar
+const deathCard = document.getElementById('deathCard');
+function showDeath() {
+  document.getElementById('deathText').textContent = state.deathCause === 'seca'
+    ? 'A terra ficou seca por tempo demais. O ficus soltou as folhas para economizar água, mas as raízes secaram. Dica: ligue a rega automática ou regue quando o medidor de terra ficar laranja.'
+    : 'A terra ficou encharcada por meses e as raízes apodreceram. Dica: regue só quando a terra começar a secar.';
+  deathCard.hidden = false;
+}
+document.getElementById('deathOpen').addEventListener('click', () => { deathCard.hidden = true; fileInput.click(); });
+document.getElementById('deathSeed').addEventListener('click', () => { deathCard.hidden = true; newMenu.querySelector('[data-origin="seed"]').click(); });
+document.getElementById('deathMuda').addEventListener('click', () => { deathCard.hidden = true; newMenu.querySelector('[data-origin="muda"]').click(); });
+document.getElementById('deathClose').addEventListener('click', () => deathCard.hidden = true);
 
 // ficha da espécie
 const speciesBtn = document.getElementById('speciesBtn');
@@ -2443,7 +2514,7 @@ function setMeter(id, value, color, text) {
   document.getElementById('t' + id).textContent = text;
 }
 function updateCare() {
-  const [lo, hi] = SP.water.ideal, w = state.water, h = state.humidity, v = vigorNow();
+  const [lo, hi] = SP.water.ideal, w = state.water, h = state.humidity, v = vigorNow() * (state.health ?? 1);
   const minH = SP.aerialRoots.minHumidity;
   setMeter('Water', w, w < lo || w > hi ? '#d08a3c' : '#4f8fc9',
     (w < 0.08 ? 'Seca: regue já' : w < lo ? 'Secando' : w > 0.95 ? 'Encharcada' : w > hi ? 'Bem úmida' : 'Ideal')
@@ -2451,7 +2522,10 @@ function updateCare() {
   setMeter('Humidity', h, h >= minH ? '#5aa6a0' : '#9fb3b8',
     `${Math.floor(h * 100)}% · ${h >= minH ? 'raízes aéreas crescem' : 'seco para raízes aéreas'}`);
   setMeter('Vigor', v, v > 0.7 ? '#3f7d4e' : v > 0.4 ? '#c9a23c' : '#c0583a',
-    state.recovery < 0.95 && state.vigor > 0.6 ? `Recuperando da poda (${Math.round(state.recovery * 100)}%)`
+    state.dead ? (state.deathCause === 'seca' ? 'Morta (seca)' : 'Morta (raízes apodreceram)')
+    : state.health < 0.3 ? 'Morrendo: regue já!' : state.health < 0.7 ? `Desidratada · saúde ${Math.round(state.health * 100)}%`
+    : state.health < 0.95 ? `Recuperando · saúde ${Math.round(state.health * 100)}%`
+    : state.recovery < 0.95 && state.vigor > 0.6 ? `Recuperando da poda (${Math.round(state.recovery * 100)}%)`
     : v > 0.85 ? 'Saudável' : v > 0.6 ? 'Um pouco fraco' : v > 0.35 ? 'Estressado: folhas amarelando' : 'Muito fraco');
   autoWaterBox.checked = state.autoWater;
   // vaso e raízes
@@ -2531,6 +2605,7 @@ if (!load()) newTree();
 applyContainer();
 setSpeed(speed);
 renderSpecies();
+if (state.dead) showDeath();
 rebuild();
 updateHud();   // depois do rebuild: as medidas usam as posições dos galhos
 updateCare();
