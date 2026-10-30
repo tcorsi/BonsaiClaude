@@ -208,7 +208,7 @@ const SPECIES = {
       reach: 100,             // até quantos mm abaixo do corte/dobra as gemas sentem a liberação
       decay: 40,              // a chance cai com a distância (mm); perto do corte brota mais
       prune: 1,               // gemas acordadas por nó logo abaixo do corte (vai caindo com a distância)
-      pinch: 0.3,             // ... num beliscão (só a ponta nova sai): a auxina volta logo e acorda bem menos
+      pinch: 0.12,            // ... num beliscão (só a ponta nova sai): a bifurcação já ramifica, embaixo acorda pouco
       hardCut: 15,            // ramos removidos para o corte contar como poda forte (efeito total)
       bend: 1,                // ... e ao deitar o galho com arame (proporcional a quanto ele deitou)
       bendFrom: 70,           // a partir de quantos graus da vertical o galho "deitado" perde a dominância
@@ -243,6 +243,12 @@ const SPECIES = {
     minInternode: 14,        // comprimento mínimo de um novo entrenó (mm): a ponta sempre consegue avançar
     maxInternode: 40,        // quanto um entrenó pode se alongar quando a árvore já está muito ramificada
     pruneVigor: 1.4,         // brotos após poda nascem mais vigorosos (entrenós mais longos)
+    // bifurcação: encurtar um ramo faz as duas últimas gemas abrirem juntas, em Y (no ficus é quase certo)
+    fork: {
+      chance: 0.9,            // chance de bifurcar num ramo novo (cai em madeira velha, que brota menos)
+      days: [8, 18],          // dias de crescimento até as duas gemas abrirem (~2 semanas no verão)
+      tilt: [0.35, 0.6],      // abertura de cada braço do Y em relação ao ramo (rad, ~20–35°)
+    },
     pruneShock: 0.8,         // queda de vigor ao remover 100% da folhagem (proporcional ao que foi cortado)
     pruneRecovery: 0.012,    // recuperação diária do choque de poda (poda de 40% no verão: ~3 semanas)
     // gravitropismo: ramos jovens e brotos novos procuram o alto; madeira e trechos aramados ficam como estão
@@ -740,6 +746,13 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
         n.target = Math.min(n.target + n.target * 0.1 * g * RATE, SP.maxInternode);
       }
     }
+    // bifurcação agendada pela poda: os dois braços do Y saem juntos, em lados opostos
+    if (n.fork != null && n.len >= n.target && (n.fork -= g) <= 0) {
+      delete n.fork;
+      const phi = rand(0, Math.PI * 2), [a, b] = SP.fork.tilt;
+      if (nodeCount < MAX_NODES) sprout(n, false, true, { phi, tilt: rand(a, b) });
+      if (nodeCount < MAX_NODES) sprout(n, false, true, { phi: phi + Math.PI + rand(-0.3, 0.3), tilt: rand(a, b) });
+    }
     // gemas latentes acordam onde houve poda; num toco sem galhos, uma delas pode virar a nova ponta
     // cada gema acordada brota por conta própria (várias podem abrir na mesma época)
     if (n.buds > 0 && n.len >= n.target && n.depth < MAX_DEPTH) {
@@ -818,12 +831,13 @@ function gravitropicBend(n, g, onTrunk, parent) {
   rotateSubtree(n, q);
 }
 
-function sprout(n, leader, afterPrune = false) {
+function sprout(n, leader, afterPrune = false, aim = null) {
   const d = n.dir;
   const u = norm(cross(d, Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]));
   const v = cross(d, u);
   let phi, tilt;
-  if (leader) { phi = rand(0, Math.PI * 2); tilt = rand(0, 0.2); }
+  if (aim) ({ phi, tilt } = aim);   // braços da bifurcação
+  else if (leader) { phi = rand(0, Math.PI * 2); tilt = rand(0, 0.2); }
   else { n.phi += 2.4; phi = n.phi; tilt = rand(0.4, 0.9); }   // ângulo áureo espalha os galhos em volta
   const p = [0, 1, 2].map(i => u[i] * Math.cos(phi) + v[i] * Math.sin(phi));
   const dir = [0, 1, 2].map(i => d[i] * Math.cos(tilt) + p[i] * Math.sin(tilt));
@@ -903,7 +917,7 @@ const ser = n => [n.len, n.target, n.dir, n.depth, n.girth, n.buds, n.age, n.see
   n.scar ? 1 : 0, n.lf ?? 1,
   n.leafLen ? Math.round(n.leafLen * 10) / 10 : 0, n.leafBack ?? 0, n.stretch ? Math.round(n.stretch * 100) / 100 : 0,
   n.wounds?.length ? n.wounds.map(w => [Math.round(w.r * 100) / 100, Math.round(w.r0 * 100) / 100, w.dir]) : 0,
-  n.knot ? Math.round(n.knot * 100) / 100 : 0];
+  n.knot ? Math.round(n.knot * 100) / 100 : 0, n.fork != null ? Math.max(0.1, Math.round(n.fork * 10) / 10) : 0];
 const de = a => ({ len: a[0], target: a[1], dir: a[2], depth: a[3], girth: a[4], buds: a[5], age: a[6], seed: a[7],
   phi: a[8], stopped: !!a[9], kids: a[10].map(de),
   aerial: (a[11] ?? []).map(r => ({ d: r[0], ang: r[1], len: r[2], girth: r[3], grounded: !!r[4] })),
@@ -911,7 +925,7 @@ const de = a => ({ len: a[0], target: a[1], dir: a[2], depth: a[3], girth: a[4],
   wire: a[12] ? { day: a[12][0], girth0: a[12][1], q: a[12][2], set: a[12][5] === undefined ? Math.min(a[12][3], 60) : a[12][3],
     bitten: !!a[12][4], prog: a[12][5], lowest: a[12][6] || 0 } : null,
   scar: !!a[13], lf: a[14] ?? 1, leafLen: a[15] || null, leafBack: a[16] || 0, stretch: a[17] || 1,
-  wounds: a[18] ? a[18].map(w => ({ r: w[0], r0: w[1], dir: w[2] })) : undefined, knot: a[19] || 0 });
+  wounds: a[18] ? a[18].map(w => ({ r: w[0], r0: w[1], dir: w[2] })) : undefined, knot: a[19] || 0, fork: a[20] || undefined });
 
 // Divide um entrenó em k trechos retos iguais (articulações extras para o arame), sem mudar a planta:
 // mesma direção, espessura, idade e nível; folhas repartidas (lf) e a ponta continua no último trecho.
@@ -919,10 +933,10 @@ const MIN_PIECE = 2;   // mm
 function splitNode(n, k) {
   if (k < 2 || n.len / k < MIN_PIECE) return false;
   const piece = n.len / k, origKids = n.kids, origTarget = n.target, aerial = n.aerial;
-  const tip = { stopped: n.stopped, buds: n.buds };
+  const tip = { stopped: n.stopped, buds: n.buds, fork: n.fork };
   const lf = (n.lf ?? 1) / k;
   const pieces = [n];
-  Object.assign(n, { len: piece, target: piece, kids: [], aerial: [], stopped: false, buds: 0, lf });
+  Object.assign(n, { len: piece, target: piece, kids: [], aerial: [], stopped: false, buds: 0, fork: undefined, lf });
   for (let i = 1; i < k; i++) {
     const p = { len: piece, target: piece, dir: [...n.dir], depth: n.depth, girth: n.girth, buds: 0, age: n.age,
       seed: Math.random(), phi: n.phi, stopped: false, kids: [], aerial: [], wire: null, scar: n.scar, lf,
@@ -1702,6 +1716,15 @@ function addWound(p, removed) {
   if (r > radius(p) * 0.6) notify('bigWound', 'Corte grande! A cicatriz vai fechando conforme o tronco engrossa: com muita folha acima dela, fecha mais rápido.');
 }
 
+// toco de um ramo encurtado: as duas gemas do topo abrem juntas (Y); corte forte acorda gemas extras
+function scheduleFork(n, hard) {
+  const f = SP.fork;
+  if (Math.random() < f.chance * (0.5 + 0.5 * budVigor(n))) {
+    n.fork = rand(...f.days);
+    n.buds = Math.min(4, n.buds + Math.round(2 * hard));
+  } else n.buds = Math.min(4, n.buds + 1 + Math.round(2 * hard));   // não bifurcou: brota uma gema só
+}
+
 function cut(plan, { undo = true } = {}) {
   if (undo) pushUndo();
   const amt = leafAmount(state.day);
@@ -1726,7 +1749,8 @@ function cut(plan, { undo = true } = {}) {
     if (!wasApex) addWound(p, plan.n);
     if (wasApex) {
       p.stopped = true;                      // a gema da ponta foi removida...
-      p.buds = Math.min(4, p.buds + 2);      // ...então as gemas logo abaixo vão brotar
+      if (!p.kids.length) scheduleFork(p, clamp(plan.removed.size / SP.apical.hardCut, 0, 1));   // ...o toco bifurca
+      else p.buds = Math.min(4, p.buds + 2);  // ...ou as gemas junto dos laterais que ficaram brotam
     } else if (Math.random() < 0.5) p.buds = Math.min(4, p.buds + 1);   // tirar um lateral às vezes acorda a gema acessória
     // tirar a ponta libera as gemas ao longo do galho; tirar só um lateral libera bem menos
     releaseApical(p, SP.apical.prune * (wasApex ? 1 : 0.3));
@@ -1739,7 +1763,7 @@ function cut(plan, { undo = true } = {}) {
     n.stopped = true;
     // beliscar a ponta (tirar só o crescimento novo) solta 1–2 brotos; um corte forte, de muitos ramos, solta mais
     const hard = clamp(plan.removed.size / SP.apical.hardCut, 0, 1);
-    n.buds = Math.min(4, n.buds + 1 + Math.round(2 * hard));
+    scheduleFork(n, hard);
     releaseApical(n._p, SP.apical.prune * lerp(SP.apical.pinch, 1, hard));   // sem a ponta, as gemas abaixo acordam
   }
   state.cuts++;
