@@ -613,7 +613,7 @@ const wireProgressOf = w => clamp(w.prog ?? (state.day - w.day) / w.set, 0, 1);
 const ser = n => [n.len, n.target, n.dir, n.depth, n.girth, n.buds, n.age, n.seed, n.phi, n.stopped ? 1 : 0, n.kids.map(ser),
   n.aerial.map(r => [r.d, r.ang, r.len, r.girth, r.grounded ? 1 : 0]),
   n.wire ? [n.wire.day, n.wire.girth0, n.wire.q, n.wire.set, n.wire.bitten ? 1 : 0, Math.round(wireProgressOf(n.wire) * 1000) / 1000,
-    Math.round(n.wire.lowest ?? 0)] : 0,
+    Math.round(n.wire.lowest ?? 0), n.wire.woke ? 1 : 0] : 0,
   n.scar ? 1 : 0, n.lf ?? 1,
   n.leafLen ? Math.round(n.leafLen * 10) / 10 : 0, n.leafBack ?? 0, n.stretch ? Math.round(n.stretch * 100) / 100 : 0,
   n.wounds?.length ? n.wounds.map(w => [Math.round(w.r * 100) / 100, Math.round(w.r0 * 100) / 100, w.dir]) : 0,
@@ -623,7 +623,7 @@ const de = a => ({ len: a[0], target: a[1], dir: a[2], depth: a[3], girth: a[4],
   aerial: (a[11] ?? []).map(r => ({ d: r[0], ang: r[1], len: r[2], girth: r[3], grounded: !!r[4] })),
   // arames antigos (sem progresso salvo) ganham o tempo de fixação atual (60 dias), contado do dia em que foram colocados
   wire: a[12] ? { day: a[12][0], girth0: a[12][1], q: a[12][2], set: a[12][5] === undefined ? Math.min(a[12][3], 60) : a[12][3],
-    bitten: !!a[12][4], prog: a[12][5], lowest: a[12][6] || 0 } : null,
+    bitten: !!a[12][4], prog: a[12][5], lowest: a[12][6] || 0, woke: !!a[12][7] } : null,
   scar: !!a[13], lf: a[14] ?? 1, leafLen: a[15] || null, leafBack: a[16] || 0, stretch: a[17] || 1,
   wounds: a[18] ? a[18].map(w => ({ r: w[0], r0: w[1], dir: w[2] })) : undefined, knot: a[19] || 0, fork: a[20] || undefined });
 
@@ -1478,14 +1478,17 @@ function reinhibit(start) {
 // Libera a dominância apical: descendo pelo galho a partir de `start` (em direção à base),
 // cada nó pode ganhar uma gema que vai brotar; mais perto do corte/dobra, mais provável.
 // Devolve quantas gemas acordaram.
-function releaseApical(start, strength) {
+// perNode: no máximo quantas gemas cada nó ganha · once: cada nó aramado responde uma vez só (dobra)
+function releaseApical(start, strength, { perNode = 4, once = false } = {}) {
   const a = SP.apical;
   let woke = 0, dist = 0;
   for (let cur = start; cur && dist <= a.reach; dist += cur.len, cur = cur._p) {
-    // valor esperado de gemas neste nó (pode passar de 1 perto do corte); cai com a distância e a idade da madeira
-    const expected = strength * Math.exp(-dist / a.decay) * budVigor(cur);
+    if (once && cur.wire) { if (cur.wire.woke) continue; cur.wire.woke = true; }
+    // valor esperado de gemas neste nó (pode passar de 1 perto do corte); cai com a distância e a idade da madeira.
+    // Trechos divididos para o arame (lf < 1) são pedaços do mesmo entrenó: repartem a chance do nó
+    const expected = strength * Math.exp(-dist / a.decay) * budVigor(cur) * (cur.lf ?? 1);
     const n = Math.floor(expected) + (Math.random() < expected % 1 ? 1 : 0);
-    const add = Math.min(n, 4 - cur.buds);
+    const add = Math.min(n, perNode, 4 - cur.buds);
     if (add > 0) { cur.buds += add; woke += add; }
   }
   return woke;
@@ -1829,7 +1832,8 @@ function endDrag() {
   // Só conta quando o galho deita mais do que já tinha deitado com este arame.
   const a = SP.apical, lying = THREE.MathUtils.radToDeg(spanDir(chain, from, to).angleTo(UP));
   if (lying > Math.max(a.bendFrom, (n.wire.lowest ?? 0) + 10)) {
-    const woke = releaseApical(chain[to], a.bend * clamp((lying - a.bendFrom) / a.bendFull, 0, 1));
+    // dobrar de novo não acumula: cada nó aramado responde uma vez, com no máximo uma gema
+    const woke = releaseApical(chain[to], a.bend * clamp((lying - a.bendFrom) / a.bendFull, 0, 1), { perNode: 1, once: true });
     n.wire.lowest = lying;
     if (woke) toast(`Galho deitado a ${Math.round(lying)}° da vertical: a dominância da ponta enfraqueceu e ${woke} ${woke === 1 ? 'gema vai' : 'gemas vão'} brotar ao longo dele.`);
   }

@@ -22,7 +22,7 @@ export default {
     pinch: 0.02,            // ... num beliscão: o Y assume logo; embaixo quase nada acorda
     hardCut: 12,            // ramos removidos para o corte contar como poda forte
     reinhibit: 0.85,        // quando o Y abre, chance de cada gema acordada perto dele voltar a dormir
-    bend: 1,                // deitar o galho com arame também libera gemas
+    bend: 0.35,             // ... e ao deitar o galho com arame: acorda bem menos que a poda (proporcional a quanto deitou)
     bendFrom: 70,
     bendFull: 30,
     oldWood: 0.3,           // brota bem em madeira velha (melhor que o ficus): aceita podas drásticas

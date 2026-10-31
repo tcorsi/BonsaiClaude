@@ -19,7 +19,7 @@ export default {
     pinch: 0.01,            // ... num beliscão (só a ponta nova sai): o Y assume logo; embaixo quase nada acorda
     hardCut: 15,            // ramos removidos para o corte contar como poda forte (efeito total)
     reinhibit: 0.9,         // quando o Y abre, chance de cada gema acordada perto dele voltar a dormir
-    bend: 1,                // ... e ao deitar o galho com arame (proporcional a quanto ele deitou)
+    bend: 0.35,             // ... e ao deitar o galho com arame: acorda bem menos que a poda (proporcional a quanto deitou)
     bendFrom: 70,           // a partir de quantos graus da vertical o galho "deitado" perde a dominância
     bendFull: 30,           // graus além disso para o efeito máximo (≈ 100°: horizontal ou um pouco abaixo)
     // madeira velha: casca grossa, gemas dormentes mais fundas e mais raras. O ficus ainda brota nela
