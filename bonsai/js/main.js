@@ -83,6 +83,11 @@ function setSpot(id) {
     state.recovery = Math.max(0.15, state.recovery - SP.light.scorchShock);
     msg += ' Mudança brusca para o sol: algumas folhas queimam. O ideal é aclimatar aos poucos.';
   }
+  // algumas espécies (como a serissa) derrubam folhas com qualquer mudança, até para um lugar melhor
+  if (SP.light.moveDrop) {
+    state.leafLoss = Math.min(0.6, state.leafLoss + SP.light.moveDrop);
+    msg += ` ${TheSp()} estranha qualquer mudança de lugar e vai soltar algumas folhas.`;
+  }
   rebuild(); updateCare(); save();
   toast(msg);
 }
@@ -94,7 +99,7 @@ function newTree(origin = 'muda', species = state?.species ?? DEFAULT_SPECIES) {
   SP = SPECIES[species] ?? SPECIES[DEFAULT_SPECIES];
   applySpecies();
   state = { day: 0, cuts: 0, species: SP.id, origin, germ: origin === 'seed' ? SP.germination.days : 0,
-    ...structuredClone(CARE_DEFAULTS), root: newNode(0, norm([rand(-0.08, 0.08), 1, rand(-0.08, 0.08)]), 55) };
+    ...structuredClone(CARE_DEFAULTS), root: newNode(0, norm([rand(-0.08, 0.08), 1, rand(-0.08, 0.08)]), SP.firstInternode ?? 55) };
   // a semente vai para um copinho; a muda chega num vaso de cultivo de 1 L com raízes pela metade
   state.container = origin === 'seed' ? 'cup' : 'pot1';
   state.autoWater = keepAuto;
@@ -811,6 +816,21 @@ function makeLeafGeo({ width = 0.27, tip = 0.8 } = {}) {
 }
 let leafGeo = makeLeafGeo(SP.leaf.shape);
 const leafMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.8 });
+// flores (espécies que florescem): estrela de 5 pétalas de raio 1, virada para +z
+const MAX_FLOWERS = 2000;
+const flowerGeo = (() => {
+  const s = new THREE.Shape();
+  for (let i = 0; i <= 10; i++) {
+    const a = i / 10 * Math.PI * 2, r = i % 2 ? 0.45 : 1;
+    if (i === 0) s.moveTo(Math.cos(a) * r, Math.sin(a) * r); else s.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  return new THREE.ShapeGeometry(s);
+})();
+const flowerMesh = new THREE.InstancedMesh(flowerGeo,
+  new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide, roughness: 0.6, emissive: 0x666666 }), MAX_FLOWERS);
+flowerMesh.count = 0; flowerMesh.frustumCulled = false; flowerMesh.castShadow = true;
+scene.add(flowerMesh);
+let flowers = [];
 const leafMesh = new THREE.InstancedMesh(leafGeo, leafMat, MAX_LEAVES);
 const FALL_MAX = 600;
 const fallMesh = new THREE.InstancedMesh(leafGeo, leafMat, FALL_MAX);
@@ -931,6 +951,7 @@ function rebuild() {
   });
   branchMesh.count = jointMesh.count = pickMesh.count = nodes.length;
   leafMesh.count = leaves.length;
+  placeFlowers();
   // folhas que chegaram ao fim da vida (ramo ficou velho) caem de verdade em vez de sumir;
   // as de galhos podados já caíram no corte
   const inTree = new Set(nodes), leafy = new Set(leaves.map(l => l.n));
@@ -1039,6 +1060,32 @@ function colorBranches() {
   lastLeafD = -1;
 }
 
+// flores nas pontas com folhas: só a espécie que floresce, e só parte das pontas (density)
+function placeFlowers() {
+  flowers = [];
+  const F = SP.flowers;
+  if (F) for (const n of nodes) {
+    if (n.kids.length || !hasLeaves(n) || hash(n.seed, 77) > F.density || flowers.length >= MAX_FLOWERS) continue;
+    const out = new THREE.Vector3(...n.dir).add(new THREE.Vector3(0, 0.8, 0)).normalize();   // virada para cima e para fora
+    tmp.position.copy(n._e).addScaledVector(out, 2 + SP.leaf.length * 0.25);   // acima do tufo de folhas da ponta
+    tmp.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), out);
+    tmp.scale.setScalar(F.size * (0.85 + hash(n.seed, 78) * 0.3));
+    tmp.updateMatrix();
+    flowers.push({ m: tmp.matrix.clone(), th: hash(n.seed, 79) });
+  }
+  flowerMesh.count = flowers.length;
+  lastLeafD = -1;
+}
+// quanto da floração está aberta no dia (0 a 1): sobe e desce dentro da janela da espécie
+function bloomAmount(d) {
+  const F = SP.flowers;
+  if (!F || state.germ > 0 || state.day < F.minAge || state.dead) return 0;
+  const f = yearFrac(d), [a, b] = F.season;
+  if (f < a || f > b) return 0;
+  const edge = Math.min(f - a, b - f) / ((b - a) * 0.25);   // abre e fecha aos poucos
+  return clamp(edge, 0, 1) * clamp((state.health ?? 1) / 0.7, 0, 1) * clamp(state.vigor / 0.7, 0, 1);
+}
+
 function updateLeaves(d) {
   if (Math.abs(d - lastLeafD) < 0.03) return;
   const amt = leafAmount(d);
@@ -1051,6 +1098,10 @@ function updateLeaves(d) {
   });
   leafMesh.instanceMatrix.needsUpdate = true;
   if (leafMesh.instanceColor) leafMesh.instanceColor.needsUpdate = true;
+  // flores abertas conforme a floração do dia
+  const bloom = bloomAmount(d);
+  flowers.forEach((fl, i) => flowerMesh.setMatrixAt(i, fl.th < bloom ? fl.m : ZERO));
+  if (flowers.length) flowerMesh.instanceMatrix.needsUpdate = true;
   prevLeafAmt = amt; lastLeafD = d;
 }
 
@@ -1497,7 +1548,7 @@ function cut(plan, { undo = true } = {}) {
   state.cuts++;
   setHover(null);
   rebuild(); updateHud();
-  if (state.cuts === 1 && !plan.root) toast('Galho podado! Sem a ponta, a auxina deixa de segurar as gemas: vão brotar ramos no corte e ao longo do galho, até na madeira velha.');
+  if (state.cuts === 1 && !plan.root) toast((SP.firstCutNote ? SP.firstCutNote + ' ' : '') + 'Galho podado! Sem a ponta, a auxina deixa de segurar as gemas: vão brotar ramos no corte e ao longo do galho, até na madeira velha.');
   save();
 }
 
@@ -2011,7 +2062,16 @@ const plantName = document.getElementById('plantName');
 const speciesSelect = document.getElementById('speciesSelect');
 speciesSelect.innerHTML = Object.values(SPECIES).map(s => `<option value="${s.id}">${s.scientific} (${s.common})</option>`).join('');
 document.getElementById('speciesPick').hidden = Object.keys(SPECIES).length < 2;
-document.getElementById('reset').addEventListener('click', () => { plantName.value = state.name ?? ''; speciesSelect.value = state.species; newMenu.hidden = !newMenu.hidden; });
+// espécies que quase não formam sementes viáveis (ex.: serissa) só começam por muda
+const seedBtn = newMenu.querySelector('[data-origin="seed"]');
+function syncSeedButton() {
+  const sp = SPECIES[speciesSelect.value], ok = sp.seeds !== false;
+  seedBtn.disabled = !ok;
+  seedBtn.title = ok ? '' : `${sp.name.article === 'a' ? 'A' : 'O'} ${sp.name.short} quase não forma sementes viáveis: comece pela muda (estaca enraizada)`;
+  seedBtn.querySelector('small').textContent = ok ? 'Plante e acompanhe a germinação' : 'Esta espécie se propaga por estaca';
+}
+speciesSelect.addEventListener('change', syncSeedButton);
+document.getElementById('reset').addEventListener('click', () => { plantName.value = state.name ?? ''; speciesSelect.value = state.species; syncSeedButton(); newMenu.hidden = !newMenu.hidden; });
 plantName.addEventListener('input', () => { state.name = plantName.value.trim() || defaultName(state.origin); updateHud(); save(); });
 
 // arquivos de planta: um .bonsai.json por planta, com nome e dia no nome do arquivo
@@ -2052,7 +2112,7 @@ fileInput.addEventListener('change', async () => {
 newMenu.querySelectorAll('[data-origin]').forEach(b => b.addEventListener('click', () => {
   newMenu.hidden = true; deathCard.hidden = true;
   pushUndo();
-  newTree(b.dataset.origin, speciesSelect.value);
+  newTree(b.dataset.origin === 'seed' && SPECIES[speciesSelect.value].seeds === false ? 'muda' : b.dataset.origin, speciesSelect.value);
   applyContainer();
   falling = []; drops = []; prevLeafAmt = null; setHover(null); rebuild(); updateHud(); updateCare(); save();
   toast(b.dataset.origin === 'seed'
@@ -2070,7 +2130,7 @@ function showDeath() {
   deathCard.hidden = false;
 }
 document.getElementById('deathOpen').addEventListener('click', () => { deathCard.hidden = true; fileInput.click(); });
-document.getElementById('deathSeed').addEventListener('click', () => { deathCard.hidden = true; newMenu.querySelector('[data-origin="seed"]').click(); });
+document.getElementById('deathSeed').addEventListener('click', () => { deathCard.hidden = true; newMenu.querySelector(SP.seeds === false ? '[data-origin="muda"]' : '[data-origin="seed"]').click(); });
 document.getElementById('deathMuda').addEventListener('click', () => { deathCard.hidden = true; newMenu.querySelector('[data-origin="muda"]').click(); });
 document.getElementById('deathClose').addEventListener('click', () => deathCard.hidden = true);
 
@@ -2295,7 +2355,7 @@ updateCare();
 setCamera(withFront(VIEWS.home), HOME_TARGET);
 setInterval(save, 5000);
 // exposto para depuração no console
-window.bonsai = { SPECIES, stepDay, newTree, ser, de, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
+window.bonsai = { SPECIES, bloomAmount, get flowers() { return flowers; }, stepDay, newTree, ser, de, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
   transplant, pruneRoots, rootFill, potFactor, setSpot, defoliate, avgLeafLen, foliageNow, lightNow,
   get leaves() { return leaves; }, setTool, selectBranch, bendAngle, bendLimit, removeWires,
   get wireChain() { return wireChain; }, get wireBases() { return wireBases; }, get handles() { return handleGroup.children; },
