@@ -3,6 +3,10 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: #e6eeec; color: var(--ui-fg);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+/* painéis arrastáveis (js/drag.js): arrasta pela área sem botões; duplo clique volta ao lugar */
+.draggable { cursor: grab; }
+.draggable button, .draggable input, .draggable select, .draggable label { cursor: pointer; }
+.draggable.dragging { cursor: grabbing; user-select: none; box-shadow: 0 8px 28px rgba(0,0,0,.18); }
 #hud { position: fixed; top: 16px; left: 16px; right: 16px; display: flex; flex-wrap: wrap; gap: 8px;
   justify-content: space-between; align-items: center; pointer-events: none; }
 .panel { pointer-events: auto; background: var(--ui-bg); backdrop-filter: blur(8px); border-radius: 12px;
@@ -82,14 +86,14 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 #wirePanel .pts { margin-right: auto; display: flex; align-items: center; gap: 6px; color: var(--ui-muted); }
 #wirePanel .pts button { width: 28px; padding: 4px 0; font-weight: 600; }
 #wirePanel .pts b { color: var(--ui-fg); min-width: 18px; text-align: center; }
-#tip { position: fixed; z-index: 5; pointer-events: none; background: rgba(45,42,38,.92); color: #fff; border-radius: 8px;
+#tip { position: fixed; z-index: 1000; pointer-events: none; background: rgba(45,42,38,.92); color: #fff; border-radius: 8px;
   padding: 8px 10px; font-size: 13px; line-height: 1.45; box-shadow: 0 4px 14px rgba(0,0,0,.2); white-space: nowrap;
   font-variant-numeric: tabular-nums; }
 #tip[hidden] { display: none; }
 #tip b { font-weight: 600; }
 #tip .t { font-weight: 600; margin-bottom: 2px; }
 #tip .m { opacity: .7; }
-#toast { position: fixed; top: 76px; left: 50%; transform: translate(-50%, -8px); background: #2d2a26; color: #fff;
+#toast { position: fixed; z-index: 1000; top: 76px; left: 50%; transform: translate(-50%, -8px); background: #2d2a26; color: #fff;
   padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transition: .3s; pointer-events: none;
   max-width: calc(100vw - 32px); text-align: center; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }

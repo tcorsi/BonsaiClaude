@@ -4,6 +4,7 @@ import { YEAR, SEASON_LEN, RATE, SEASONS, MAX_DEPTH, MAX_NODES, MAX_LEAVES, MAX_
 import { SPECIES, DEFAULT_SPECIES } from './species/index.js';
 import { CONTAINERS, CONTAINER_ORDER } from './containers.js';
 import { setupRender, QUALITY, QUALITY_ORDER } from './render.js';
+import { makeDraggable } from './drag.js';
 
 let SP = SPECIES[DEFAULT_SPECIES];
 // nome da planta nos avisos: theSp() = "o ficus", TheSp() = "O ficus"
@@ -630,16 +631,21 @@ const de = a => ({ len: a[0], target: a[1], dir: a[2], depth: a[3], girth: a[4],
 // Divide um entrenó em k trechos retos iguais (articulações extras para o arame), sem mudar a planta:
 // mesma direção, espessura, idade e nível; folhas repartidas (lf) e a ponta continua no último trecho.
 const MIN_PIECE = 2;   // mm
+// k: número de trechos iguais, ou uma lista com o comprimento de cada trecho (soma = n.len)
 function splitNode(n, k) {
-  if (k < 2 || n.len / k < MIN_PIECE) return false;
-  const piece = n.len / k, origKids = n.kids, origTarget = n.target, aerial = n.aerial;
+  const lens = Array.isArray(k) ? k : Array(k).fill(n.len / k);
+  k = lens.length;
+  if (k < 2 || lens.some(l => l < MIN_PIECE)) return false;
+  const origKids = n.kids, origTarget = n.target, aerial = n.aerial, total = n.len;
   const tip = { stopped: n.stopped, buds: n.buds, fork: n.fork };
-  const lf = (n.lf ?? 1) / k;
+  const lf0 = n.lf ?? 1;
   const pieces = [n];
-  Object.assign(n, { len: piece, target: piece, kids: [], aerial: [], stopped: false, buds: 0, fork: undefined, lf });
+  // o arame do trecho vale para os pedaços; a curvatura (q) fica só no primeiro, onde ela já está
+  const wireOf = () => n.wire ? { ...n.wire, q: [0, 0, 0, 1], lowest: 0 } : null;
+  Object.assign(n, { len: lens[0], target: lens[0], kids: [], aerial: [], stopped: false, buds: 0, fork: undefined, lf: lf0 * lens[0] / total });
   for (let i = 1; i < k; i++) {
-    const p = { len: piece, target: piece, dir: [...n.dir], depth: n.depth, girth: n.girth, buds: 0, age: n.age,
-      seed: Math.random(), phi: n.phi, stopped: false, kids: [], aerial: [], wire: null, scar: n.scar, lf,
+    const p = { len: lens[i], target: lens[i], dir: [...n.dir], depth: n.depth, girth: n.girth, buds: 0, age: n.age,
+      seed: Math.random(), phi: n.phi, stopped: false, kids: [], aerial: [], wire: wireOf(), scar: n.scar, lf: lf0 * lens[i] / total,
       leafLen: n.leafLen, leafBack: n.leafBack, stretch: n.stretch };
     pieces[i - 1].kids = [p];
     pieces.push(p);
@@ -651,10 +657,12 @@ function splitNode(n, k) {
     pieces[k - 1].knot = kn;
   }
   const last = pieces[k - 1];
-  Object.assign(last, tip, { kids: origKids, target: Math.max(piece, origTarget - piece * (k - 1)) });
+  const before = total - lens[k - 1];
+  Object.assign(last, tip, { kids: origKids, target: Math.max(lens[k - 1], origTarget - before) });
   for (const r of aerial) {   // cada raiz aérea vai para o trecho de onde pende
-    const i = Math.min(k - 1, Math.floor(r.d / piece));
-    pieces[i].aerial.push({ ...r, d: r.d - i * piece });
+    let i = 0, start = 0;
+    while (i < k - 1 && r.d >= start + lens[i]) start += lens[i++];
+    pieces[i].aerial.push({ ...r, d: r.d - start });
   }
   return true;
 }
@@ -1729,15 +1737,24 @@ function addHandles(chain) {
   }
 }
 // garante pelo menos `want` articulações em cada galho selecionado, dividindo os trechos mais longos ao meio
-function ensureJoints(want) {
+// cria articulações nas posições igualmente espaçadas ao longo do galho (1/N, 2/N, ...), dividindo o entrenó
+// no ponto exato; uma articulação que já está perto o bastante é aproveitada
+function ensureJoints(want, bases = wireBases) {
   let changed = false;
-  for (const base of wireBases) {
-    let chain = chainOf(base);
-    while (chain.length < want) {
-      const longest = chain.reduce((a, n) => n.len > a.len ? n : a);
-      if (!splitNode(longest, 2)) break;
-      changed = true;
-      chain = chainOf(base);
+  for (const base of bases) {
+    const total = chainOf(base).reduce((t, n) => t + n.len, 0);
+    const tol = Math.max(MIN_PIECE, total / want * 0.12);
+    for (let i = 1; i < want; i++) {
+      const at = total * i / want;
+      let acc = 0;
+      for (const n of chainOf(base)) {
+        if (at <= acc + n.len) {
+          const off = at - acc;
+          if (off > tol && n.len - off > tol && splitNode(n, [off, n.len - off])) changed = true;
+          break;
+        }
+        acc += n.len;
+      }
     }
   }
   return changed;
@@ -1780,7 +1797,9 @@ function selectBranch(n, add = false) {
   const base = n ? branchBase(n) : null;
   if (!add) wireBases = base ? [base] : [];
   else if (base) wireBases = wireBases.includes(base) ? wireBases.filter(b => b !== base) : [...wireBases, base];
-  refreshHandles();
+  // pontos distribuídos por igual no galho recém-selecionado (articulações invisíveis: a planta não muda)
+  if (base && wireBases.includes(base) && ensureJoints(wireHandleN, [base])) { rebuild(); save(); }
+  else refreshHandles();
   colorBranches();
 }
 
@@ -2353,6 +2372,9 @@ qualityBtn.addEventListener('click', () => {
 });
 syncQualityBtn();
 R.tune();
+
+// todos os painéis podem ser arrastados pela tela (e vêm para a frente ao abrir ou ao serem tocados)
+for (const id of ['speciesCard', 'newMenu', 'potMenu', 'wirePanel', 'deathCard', 'care', 'views']) makeDraggable(document.getElementById(id));
 
 let last = performance.now(), acc = 0, time = 0;
 function frame(now) {
