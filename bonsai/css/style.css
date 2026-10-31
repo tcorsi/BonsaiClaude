@@ -1,0 +1,94 @@
+:root { --ui-bg: rgba(255,255,255,.75); --ui-fg: #2d2a26; --ui-muted: #6d665d; --accent: #3f7d4e; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #e6eeec; color: var(--ui-fg);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+#hud { position: fixed; top: 16px; left: 16px; right: 16px; display: flex; flex-wrap: wrap; gap: 8px;
+  justify-content: space-between; align-items: center; pointer-events: none; }
+.panel { pointer-events: auto; background: var(--ui-bg); backdrop-filter: blur(8px); border-radius: 12px;
+  padding: 6px 8px; display: flex; gap: 4px; align-items: center; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+#date { padding: 4px 8px; font-weight: 600; }
+#date small { font-weight: 400; color: var(--ui-muted); margin-left: 6px; }
+#info { flex-wrap: wrap; }
+#measures, #branches { padding: 4px 8px; border-left: 1px solid rgba(0,0,0,.1); font-size: 14px; color: var(--ui-fg);
+  font-variant-numeric: tabular-nums; }
+#measures b, #branches b { font-weight: 600; }
+#branches[hidden] { display: none; }
+#branches small { color: var(--ui-muted); font-size: 13px; }
+button { font: inherit; font-size: 14px; border: 0; background: transparent; padding: 6px 10px; border-radius: 8px;
+  cursor: pointer; color: var(--ui-fg); }
+button:hover { background: rgba(0,0,0,.06); }
+button.on { background: var(--accent); color: #fff; }
+button:disabled { opacity: .4; cursor: default; background: transparent; }
+#speciesBtn { font-weight: 600; }
+#newMenu { position: fixed; top: 64px; right: 16px; flex-direction: column; align-items: stretch; width: 250px; z-index: 30; }
+#newMenu[hidden] { display: none; }
+#newMenu button { text-align: left; display: flex; flex-direction: column; }
+#newMenu small { color: var(--ui-muted); font-size: 12px; }
+#newMenu hr { border: 0; border-top: 1px solid rgba(0,0,0,.08); margin: 2px 0; }
+#newMenu .name { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ui-muted); padding: 4px 6px; }
+#newMenu .name select { font: inherit; font-size: 14px; color: inherit; padding: 5px 7px; border: 1px solid rgba(0,0,0,.15); border-radius: 6px; background: rgba(255,255,255,.7); }
+#newMenu .name input { font: inherit; font-size: 14px; color: inherit; padding: 5px 7px; border: 1px solid rgba(0,0,0,.15); border-radius: 6px; background: rgba(255,255,255,.7); }
+#deathCard { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 40; display: block;
+  width: min(380px, calc(100vw - 32px)); padding: 18px 20px; text-align: center; }
+#deathCard[hidden] { display: none; }
+#deathCard h2 { margin: 0 0 8px; font-size: 18px; }
+#deathCard p { margin: 0 0 14px; color: var(--ui-muted); font-size: 14px; line-height: 1.4; }
+#deathCard .row { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+#deathCard .link { margin-top: 10px; background: none; color: var(--ui-muted); font-size: 13px; }
+#speciesCard { position: fixed; top: 72px; left: 16px; width: min(340px, calc(100vw - 32px)); display: block;
+  padding: 14px 16px; font-size: 14px; line-height: 1.45; }
+#speciesCard[hidden] { display: none; }
+#speciesCard h2 { margin: 0 0 2px; font-size: 17px; }
+#speciesCard .sub { margin: 0; color: var(--ui-muted); }
+#speciesCard ul { margin: 10px 0 0; padding-left: 18px; }
+#views { position: fixed; right: 16px; top: 50%; transform: translateY(-50%); flex-direction: column; align-items: center;
+  padding: 6px; }
+#viewCube { display: block; width: 120px; height: 120px; cursor: grab; touch-action: none; }
+#views .row { display: flex; gap: 4px; }
+#views .icon { font-size: 20px; line-height: 1; width: 40px; height: 36px; padding: 0; }
+#care { position: fixed; bottom: 16px; left: 16px; width: 248px; flex-direction: column; align-items: stretch;
+  gap: 8px; padding: 12px; font-size: 13px; }
+.meter { display: grid; grid-template-columns: 64px 1fr; gap: 2px 8px; align-items: center; }
+.meter .bar { height: 8px; border-radius: 4px; background: rgba(0,0,0,.08); overflow: hidden; }
+.meter .bar i { display: block; height: 100%; border-radius: 4px; transition: width .3s, background .3s; }
+.meter em { grid-column: 2; font-style: normal; color: var(--ui-muted); font-size: 12px; }
+#care .row { display: flex; gap: 6px; }
+#care .row button { flex: 1; background: rgba(0,0,0,.05); }
+#care .row button:hover { background: rgba(0,0,0,.1); }
+#care label { display: flex; gap: 6px; align-items: center; color: var(--ui-muted); cursor: pointer; }
+#potName { font-weight: 600; }
+#potMenu { position: fixed; bottom: 16px; left: 276px; width: 290px; flex-direction: column; align-items: stretch;
+  max-height: calc(100vh - 32px); overflow: auto; }
+#potMenu[hidden] { display: none; }
+#potMenu button { text-align: left; display: flex; flex-direction: column; gap: 1px; }
+#potMenu button small { color: var(--ui-muted); font-size: 12px; }
+#potMenu .warn { color: #b0552f; }
+@media (max-width: 640px) { #potMenu { left: 16px; bottom: auto; top: 72px; width: calc(100vw - 32px); } }
+#hint { position: fixed; bottom: 16px; right: 16px; background: var(--ui-bg);
+  backdrop-filter: blur(8px); border-radius: 999px; padding: 8px 16px; font-size: 14px; color: var(--ui-muted);
+  pointer-events: none; white-space: nowrap; max-width: calc(100vw - 296px); overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) { #hint { display: none; } }
+#views .tools { border-top: 1px solid rgba(0,0,0,.08); padding-top: 4px; margin-top: 2px; }
+#wirePanel { position: fixed; top: 72px; left: 50%; transform: translateX(-50%); flex-direction: column;
+  align-items: stretch; gap: 4px; padding: 10px 14px; font-size: 13px; max-width: min(560px, calc(100vw - 32px)); }
+#wirePanel[hidden] { display: none; }
+#wirePanel .m { color: var(--ui-muted); }
+#wirePanel .warn { color: #b0552f; font-weight: 600; }
+#wirePanel ul { margin: 2px 0; padding-left: 18px; }
+#wirePanel .row { display: flex; gap: 6px; justify-content: flex-end; }
+#wirePanel .row button { background: rgba(0,0,0,.05); }
+#wirePanel .pts { margin-right: auto; display: flex; align-items: center; gap: 6px; color: var(--ui-muted); }
+#wirePanel .pts button { width: 28px; padding: 4px 0; font-weight: 600; }
+#wirePanel .pts b { color: var(--ui-fg); min-width: 18px; text-align: center; }
+#tip { position: fixed; z-index: 5; pointer-events: none; background: rgba(45,42,38,.92); color: #fff; border-radius: 8px;
+  padding: 8px 10px; font-size: 13px; line-height: 1.45; box-shadow: 0 4px 14px rgba(0,0,0,.2); white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+#tip[hidden] { display: none; }
+#tip b { font-weight: 600; }
+#tip .t { font-weight: 600; margin-bottom: 2px; }
+#tip .m { opacity: .7; }
+#toast { position: fixed; top: 76px; left: 50%; transform: translate(-50%, -8px); background: #2d2a26; color: #fff;
+  padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transition: .3s; pointer-events: none;
+  max-width: calc(100vw - 32px); text-align: center; }
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
