@@ -129,7 +129,8 @@
 <div class="panel" id="views">
   <canvas id="viewCube" title="Clique numa face para ver daquele lado · arraste para girar"></canvas>
   <div class="row">
-    <button class="icon" data-view="home" title="Vista padrão (tecla H)">⌂</button>
+    <button class="icon" data-view="home" title="Vista padrão: a frente do bonsai (tecla H)">⌂</button>
+    <button class="icon" id="setFront" title="Definir frente: gire a planta até o lado que quer como frente e clique">🎯</button>
     <button class="icon" id="leafToggle" title="Ocultar folhas (tecla F)">🍃</button>
   </div>
   <div class="row tools">
@@ -461,7 +462,8 @@ const CARE_DEFAULTS = { water: 0.7, humidity: 0.6, vigor: 1, recovery: 1, waterU
   spot: 'sun', leafLoss: 0, defolBoost: 0,     // lugar (luz), folhas caídas por aclimatação, efeito da desfolha
   foliageAvg: null,                            // média recente da folhagem (equilíbrio raiz/copa)
   trunkMax: 0,                                 // maior altura que o tronco já atingiu (fim da fase juvenil)
-  health: 1, dead: false, deathCause: null };  // saúde (seca/encharcamento); morta não cresce mais
+  health: 1, dead: false, deathCause: null,
+  front: 0.35 };                               // lado escolhido como frente do bonsai (ângulo em volta do vaso)  // saúde (seca/encharcamento); morta não cresce mais
 
 // ---------- Luz ----------
 const SPOTS = {
@@ -1582,7 +1584,7 @@ controls.screenSpacePanning = true;
 
 const HOME_TARGET = new THREE.Vector3(0, 90, 0);
 const VIEWS = {
-  home:   { r: 680, phi: 1.33, theta: 0.35 },
+  home:   { r: 680, phi: 1.33, theta: 0 },
   top:    { r: 620, phi: 0.001, theta: 0 },
   front:  { r: 640, phi: Math.PI / 2, theta: 0 },
   back:   { r: 640, phi: Math.PI / 2, theta: Math.PI },
@@ -1591,6 +1593,8 @@ const VIEWS = {
   bottom: { r: 620, phi: Math.PI - 0.001, theta: 0 },
 };
 
+// as vistas são relativas à frente escolhida para o bonsai (state.front gira tudo em volta do vaso)
+const withFront = v => ({ ...v, theta: v.theta + (state?.front ?? 0) });
 function setCamera(sph, target) {
   controls.target.copy(target);
   camera.position.setFromSpherical(new THREE.Spherical(sph.r, sph.phi, sph.theta)).add(target);
@@ -1600,7 +1604,7 @@ function setCamera(sph, target) {
 let anim = null;
 function goToView(name) {
   const from = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
-  const to = VIEWS[name];
+  const to = withFront(VIEWS[name]);
   const dTheta = ((to.theta - from.theta + Math.PI * 3) % (Math.PI * 2)) - Math.PI;   // caminho mais curto
   anim = { t: 0, from: { r: from.radius, phi: from.phi, theta: from.theta }, to: { ...to, theta: from.theta + dTheta },
     fromTarget: controls.target.clone() };
@@ -1617,6 +1621,14 @@ function updateAnim(dt) {
 controls.addEventListener('start', () => { if (anim) { anim = null; controls.enableDamping = true; } });
 
 document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => goToView(b.dataset.view)));
+// definir frente: o lado para onde a câmera está olhando agora vira a frente do bonsai
+document.getElementById('setFront').addEventListener('click', () => {
+  const s = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+  state.front = s.theta;
+  save();
+  goToView('home');
+  toast('Frente definida! O botão ⌂ e o cubo agora usam este lado como frente.');
+});
 
 // esconder as folhas para ver só a estrutura dos galhos
 const leafToggle = document.getElementById('leafToggle');
@@ -1665,6 +1677,7 @@ const cubeRay = new THREE.Raycaster(), cubeNdc = new THREE.Vector2();
 let cubeHover = -1, cubeDrag = null;
 
 function updateViewCube() {
+  cube.rotation.y = state.front ?? 0;   // a face FRENTE do cubo aponta para a frente escolhida
   const off = camera.position.clone().sub(controls.target).normalize();
   cubeCam.position.copy(off).multiplyScalar(3.3);
   cubeCam.up.copy(camera.up);
@@ -2441,6 +2454,7 @@ fileInput.addEventListener('change', async () => {
   falling = []; drops = []; prevLeafAmt = null; setHover(null); selectBranch(null);
   rebuild(); updateHud(); updateCare(); renderSpecies(); save();
   deathCard.hidden = !state.dead;
+  goToView('home');   // cada planta tem a sua frente
   toast(`Planta "${state.name}" carregada (dia ${state.day + 1}). Tempo pausado. Use Desfazer para voltar à anterior.`);
 });
 newMenu.querySelectorAll('[data-origin]').forEach(b => b.addEventListener('click', () => {
@@ -2671,7 +2685,7 @@ if (state.dead) showDeath();
 rebuild();
 updateHud();   // depois do rebuild: as medidas usam as posições dos galhos
 updateCare();
-setCamera(VIEWS.home, HOME_TARGET);
+setCamera(withFront(VIEWS.home), HOME_TARGET);
 setInterval(save, 5000);
 // exposto para depuração no console
 window.bonsai = { stepDay, newTree, ser, de, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
