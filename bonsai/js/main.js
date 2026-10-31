@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { YEAR, SEASON_LEN, RATE, SEASONS, MAX_DEPTH, MAX_NODES, MAX_LEAVES, MAX_ROOTS, SAVE_KEY, HINT, rand, lerp, clamp, frac, hash, mixColor, rgb, norm, cross, dot } from './util.js';
 import { SPECIES, DEFAULT_SPECIES } from './species/index.js';
 import { CONTAINERS, CONTAINER_ORDER } from './containers.js';
+import { setupRender, QUALITY, QUALITY_ORDER } from './render.js';
 
 let SP = SPECIES[DEFAULT_SPECIES];
 // nome da planta nos avisos: theSp() = "o ficus", TheSp() = "O ficus"
@@ -698,18 +699,23 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
 
+// intensidades base das luzes (a luz de ambiente do render.js já ilumina por todos os lados)
+const HEMI = 0.55, SUN = 2.4;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 1, 5000);
 
-const hemi = new THREE.HemisphereLight(0xffffff, 0x8a7a66, 1.1);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x8a7a66, HEMI);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+const sun = new THREE.DirectionalLight(0xfff4e6, SUN);   // sol levemente quente
 sun.position.set(220, 420, 260);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 Object.assign(sun.shadow.camera, { left: -300, right: 300, top: 350, bottom: -150, near: 10, far: 1200 });
 sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.6;
 scene.add(sun);
+// luz de ambiente, tone mapping, oclusão ambiente, vento e qualidade (js/render.js)
+const R = setupRender({ renderer, scene, camera, sun });
 
 const mat = color => new THREE.MeshStandardMaterial({ color, roughness: 0.9 });
 function addMesh(geo, material, pos, scale) {
@@ -776,7 +782,7 @@ function buildContainer(c) {
     potGroup.add(moss);
   }
 }
-const applyContainer = () => buildContainer(container());
+const applyContainer = () => { buildContainer(container()); R.tune(); };
 
 // nebari: raízes aparentes na base
 const flare = addMesh(new THREE.CylinderGeometry(1, 1.9, 1, 14), mat(0x5c402e), [0, 0, 0], [1, 1, 1]);
@@ -1377,7 +1383,7 @@ addEventListener('keydown', e => {
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+  R.resize();
 });
 
 // ---------- Poda ----------
@@ -2317,6 +2323,21 @@ function fmtLength(units) {
 }
 
 // ---------- Loop principal ----------
+// vento: galhos, folhas, flores, arame e raízes aéreas balançam juntos (folhas e flores também tremulam)
+for (const [m, flutter] of [[branchMat, 0], [jointMesh.material, 0], [woundMesh.material, 0], [coilMesh.material, 0],
+  [rootMesh.material, 0], [leafMat, 0.9], [flowerMesh.material, 0.6]]) R.addWind(m, flutter);
+
+// qualidade gráfica: alterna baixa → média → alta
+const qualityBtn = document.getElementById('qualityBtn');
+const syncQualityBtn = () => qualityBtn.title = `Qualidade gráfica: ${QUALITY[R.quality].label} (clique para mudar)`;
+qualityBtn.addEventListener('click', () => {
+  R.setQuality(QUALITY_ORDER[(QUALITY_ORDER.indexOf(R.quality) + 1) % QUALITY_ORDER.length]);
+  syncQualityBtn();
+  toast(`Qualidade gráfica: ${QUALITY[R.quality].label}` + (R.quality === 'baixa' ? ' (sem sombreamento suave nem vento, mais leve)' : R.quality === 'alta' ? ' (tudo no máximo; pode pesar em computadores mais fracos)' : ''));
+});
+syncQualityBtn();
+R.tune();
+
 let last = performance.now(), acc = 0, time = 0;
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -2331,15 +2352,15 @@ function frame(now) {
   updateSky(d);
   // a cena fica mais clara ou mais escura conforme a luz do lugar
   const L = lightNow();
-  sun.intensity = 1.8 * (0.35 + 0.65 * L);
-  hemi.intensity = 1.1 * (0.55 + 0.45 * L);
+  sun.intensity = SUN * (0.35 + 0.65 * L);
+  hemi.intensity = HEMI * (0.55 + 0.45 * L);
   updateLeaves(d);
   updateFalling(dt);
   updateDrops(dt);
   updateSnow(d, dt);
   updateAnim(dt);
   controls.update();
-  renderer.render(scene, camera);
+  R.render(time);
   updateViewCube();
   requestAnimationFrame(frame);
 }
