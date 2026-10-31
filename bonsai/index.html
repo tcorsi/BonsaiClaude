@@ -270,7 +270,8 @@ const SPECIES = {
     pruneVigor: 1.4,         // brotos após poda nascem mais vigorosos (entrenós mais longos)
     // bifurcação: encurtar um ramo faz as duas últimas gemas abrirem juntas, em Y (no ficus é quase certo)
     fork: {
-      chance: 0.9,            // chance de bifurcar num ramo novo (cai em madeira velha, que brota menos)
+      chance: 0.95,           // chance de bifurcar num ramo novo (no ficus é quase certo)
+      oldWood: 0.75,          // ... multiplicada por isso na madeira mais velha (ainda bifurca na maioria das vezes)
       days: [8, 18],          // dias de crescimento até as duas gemas abrirem (~2 semanas no verão)
       tilt: [0.35, 0.6],      // abertura de cada braço do Y em relação ao ramo (rad, ~20–35°)
     },
@@ -500,11 +501,13 @@ const vigorNow = () => state.vigor * (0.4 + 0.6 * state.recovery);
 
 // origin: 'muda' (planta de 1 ano) ou 'seed' (semente na terra, ainda por germinar)
 function newTree(origin = 'muda') {
+  const keepAuto = state?.autoWater ?? false;   // a rega automática é escolha do jogador: vale para a planta nova
   SP = SPECIES['ficus-microcarpa'];
   state = { day: 0, cuts: 0, species: 'ficus-microcarpa', origin, germ: origin === 'seed' ? SP.germination.days : 0,
     ...structuredClone(CARE_DEFAULTS), root: newNode(0, norm([rand(-0.08, 0.08), 1, rand(-0.08, 0.08)]), 55) };
   // a semente vai para um copinho; a muda chega num vaso de cultivo de 1 L com raízes pela metade
   state.container = origin === 'seed' ? 'cup' : 'pot1';
+  state.autoWater = keepAuto;
   state.name = defaultName(origin);
   state.rootMass = origin === 'seed' ? 0.005 : 0.5;
   if (origin === 'muda') for (let i = 0; i < YEAR; i++) stepDay(true);   // muda de 1 ano, bem cuidada
@@ -822,7 +825,8 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
       }
     }
     // bifurcação agendada pela poda: os dois braços do Y saem juntos, em lados opostos
-    if (n.fork != null && n.len >= n.target && (n.fork -= g) <= 0) {
+    // a contagem segue a estação e a água, não o vigor: mesmo depois de uma poda grande as gemas abrem em ~2 semanas
+    if (n.fork != null && n.len >= n.target && (n.fork -= forkPace()) <= 0) {
       delete n.fork;
       const phi = rand(0, Math.PI * 2), [a, b] = SP.fork.tilt;
       if (nodeCount < MAX_NODES) sprout(n, false, true, { phi, tilt: rand(a, b) });
@@ -1764,8 +1768,8 @@ function setHover(hit) {
   hint.textContent = !plan ? HINT_FOR()
     : plan.root ? (plan.root.grounded ? 'Cortar esta raiz-pilar' : 'Cortar esta raiz aérea')
     : plan.flush ? `Remover o galho inteiro · corte rente · ${size} ${size === 1 ? 'ramo' : 'ramos'}`
-    : size ? `Podar aqui · remove ${size} ${size === 1 ? 'ramo' : 'ramos'}`
-    : 'Cortar a ponta deste galho';
+    : plan.whole ? `Remover este ramo inteiro${size > 1 ? ` (${size} ramos)` : ''} · sem bifurcação`
+    : `Encurtar aqui${size ? ` · remove ${size} ${size === 1 ? 'ramo' : 'ramos'}` : ''} · o toco solta 2 brotos (Y)`;
   if (changed) { hoverSet = plan ? plan.removed : new Set(); colorBranches(); }
 }
 
@@ -1799,10 +1803,11 @@ function addWound(p, removed) {
   if (r > radius(p) * 0.6) notify('bigWound', 'Corte grande! A cicatriz vai fechando conforme o tronco engrossa: com muita folha acima dela, fecha mais rápido.');
 }
 
+const forkPace = () => growthFactor(state.day) / SP.growthBySeason[0] * (waterGrowth() > 0 ? 1 : 0);
 // toco de um ramo encurtado: as duas gemas do topo abrem juntas (Y); corte forte acorda gemas extras
 function scheduleFork(n, hard) {
   const f = SP.fork;
-  if (Math.random() < f.chance * (0.5 + 0.5 * budVigor(n))) {
+  if (Math.random() < f.chance * lerp(f.oldWood, 1, budVigor(n))) {
     n.fork = rand(...f.days);
     n.buds = Math.min(4, n.buds + Math.round(2 * hard));
   } else n.buds = Math.min(4, n.buds + 1 + Math.round(2 * hard));   // não bifurcou: brota uma gema só
