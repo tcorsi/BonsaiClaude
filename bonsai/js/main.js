@@ -1430,11 +1430,15 @@ function planCut(hit) {
     const base = branchBase(n);
     if (base._p) return { hit, n: base, parent: base._p, whole: true, flush: true, removed: collect(base, new Set()) };
   }
+  return { hit, ...planAt(n, t) };
+}
+// corte no ponto t do trecho n (perto da base do trecho: tira o trecho inteiro)
+function planAt(n, t) {
   const parent = findParent(state.root, n);
-  if (parent && n.len * t < 2) return { hit, n, parent, whole: true, removed: collect(n, new Set()) };
+  if (parent && n.len * t < 2) return { n, parent, whole: true, removed: collect(n, new Set()) };
   const removed = new Set();
   for (const k of n.kids) collect(k, removed);
-  return { hit, n, parent, whole: false, keep: Math.max(n.len * t, n.depth === 0 ? 5 : 2), removed };
+  return { n, parent, whole: false, keep: Math.max(n.len * t, n.depth === 0 ? 5 : 2), removed };
 }
 
 function placeMarker(plan) {
@@ -1521,7 +1525,8 @@ function scheduleFork(n, hard) {
   } else n.buds = Math.min(4, n.buds + 1 + Math.round(2 * hard));   // não bifurcou: brota uma gema só
 }
 
-function cut(plan, { undo = true } = {}) {
+// refresh: false deixa o redesenho e o salvamento para quem faz vários cortes de uma vez
+function cut(plan, { undo = true, refresh = true } = {}) {
   if (undo) pushUndo();
   const amt = leafAmount(state.day);
   let removedLeaves = 0;
@@ -1572,6 +1577,7 @@ function cut(plan, { undo = true } = {}) {
     releaseApical(n._p, SP.apical.prune * lerp(SP.apical.pinch, 1, hard));   // sem a ponta, as gemas abaixo acordam
   }
   state.cuts++;
+  if (!refresh) return;
   setHover(null);
   rebuild(); updateHud();
   if (state.cuts === 1 && !plan.root) toast((SP.firstCutNote ? SP.firstCutNote + ' ' : '') + 'Galho podado! Sem a ponta, a auxina deixa de segurar as gemas: vão brotar ramos no corte e ao longo do galho, até na madeira velha.');
@@ -2005,10 +2011,12 @@ function bindWirePanel() {
   document.getElementById('wireClose').addEventListener('click', () => selectBranch(null));
 }
 
-const toolBtns = { prune: document.getElementById('toolPrune'), branch: document.getElementById('toolBranch'), wire: document.getElementById('toolWire') };
+const toolBtns = { prune: document.getElementById('toolPrune'), branch: document.getElementById('toolBranch'), shape: document.getElementById('toolShape'), wire: document.getElementById('toolWire') };
 function setTool(t) {
   if (t === tool) return;
   tool = t;
+  if (stroke) cancelStroke();
+  el.style.cursor = t === 'shape' ? 'crosshair' : 'default';
   for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle('on', k === t);
   setHover(null); hoverSet = new Set(); selectBranch(null); tipEl.hidden = true;
   hint.textContent = HINT_FOR();
@@ -2020,8 +2028,11 @@ function setTool(t) {
 toolBtns.prune.addEventListener('click', () => setTool('prune'));
 toolBtns.branch.addEventListener('click', () => setTool(tool === 'branch' ? 'prune' : 'branch'));
 toolBtns.wire.addEventListener('click', () => setTool(tool === 'wire' ? 'prune' : 'wire'));
+toolBtns.shape.addEventListener('click', () => setTool(tool === 'shape' ? 'prune' : 'shape'));
 addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.tagName === 'INPUT') return;
+  if (e.key === 'd' || e.key === 'D') setTool(tool === 'shape' ? 'prune' : 'shape');
+  if (e.key === 'Escape' && stroke) cancelStroke();
   if (e.key === 'a' || e.key === 'A') setTool(tool === 'wire' ? 'prune' : 'wire');
   if (e.key === 'p' || e.key === 'P') setTool('prune');
   if (e.key === 'r' || e.key === 'R') setTool(tool === 'branch' ? 'prune' : 'branch');
@@ -2031,15 +2042,151 @@ addEventListener('keydown', e => {
 });
 const HINT_FOR = () => tool === 'wire'
   ? 'Arame: clique num galho · Shift+clique junta mais galhos · arraste os pontos para dobrar · + / − muda a quantidade de pontos · Esc solta · A volta à poda'
+  : tool === 'shape'
+  ? 'Traço: desenhe uma linha e os galhos que a atravessam são cortados ali · feche o traço para uma silhueta (redonda, triângulo...) · Alt+arrastar gira · D volta à poda'
   : tool === 'branch'
   ? 'Galho inteiro: clique em qualquer ponto de um galho para removê-lo rente ao eixo · R ou ✂️ volta à poda normal'
   : HINT;
+
+// ---------- Poda por traço (topiaria) ----------
+// Desenha-se uma linha na tela; todo galho que a atravessa é cortado ali, como uma tesoura de cerca viva
+// passando por aquela linha. Traço fechado (termina perto de onde começou) vira uma silhueta: o que está
+// dentro fica, o que sai dela é cortado. Os cortes são podas normais (o toco brota e bifurca).
+const strokeCanvas = document.createElement('canvas');
+strokeCanvas.id = 'strokeCanvas';
+document.body.appendChild(strokeCanvas);
+const sctx = strokeCanvas.getContext('2d');
+let stroke = null, shapePreview = null, shapeRaf = 0;
+const CLOSE_PX = 40;
+const strokeClosed = s => s.length > 8 && Math.hypot(s[0][0] - s.at(-1)[0], s[0][1] - s.at(-1)[1]) < CLOSE_PX
+  && s.reduce((t, p, i) => i ? t + Math.hypot(p[0] - s[i - 1][0], p[1] - s[i - 1][1]) : 0, 0) > CLOSE_PX * 4;
+
+function drawStroke() {
+  const dpr = devicePixelRatio || 1;
+  if (strokeCanvas.width !== Math.round(innerWidth * dpr) || strokeCanvas.height !== Math.round(innerHeight * dpr)) {
+    strokeCanvas.width = Math.round(innerWidth * dpr); strokeCanvas.height = Math.round(innerHeight * dpr);
+  }
+  sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sctx.clearRect(0, 0, innerWidth, innerHeight);
+  if (!stroke || stroke.length < 2) return;
+  const closed = strokeClosed(stroke);
+  sctx.lineWidth = 2.5; sctx.lineJoin = sctx.lineCap = 'round';
+  sctx.strokeStyle = 'rgba(214, 92, 58, 0.9)';
+  sctx.beginPath();
+  stroke.forEach(([x, y], i) => i ? sctx.lineTo(x, y) : sctx.moveTo(x, y));
+  if (closed) { sctx.closePath(); sctx.fillStyle = 'rgba(63, 125, 78, 0.08)'; sctx.fill(); }
+  sctx.stroke();
+}
+
+const projV = new THREE.Vector3();
+function toScreen(p) {
+  projV.copy(p).project(camera);
+  return [(projV.x + 1) / 2 * innerWidth, (1 - projV.y) / 2 * innerHeight, projV.z];
+}
+// t (0..1) onde o trecho a→b cruza o segmento c→d, ou null
+function crossAt(a, b, c, d) {
+  const rx = b[0] - a[0], ry = b[1] - a[1], sx = d[0] - c[0], sy = d[1] - c[1];
+  const den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-9) return null;
+  const qx = c[0] - a[0], qy = c[1] - a[1];
+  const t = (qx * sy - qy * sx) / den, u = (qx * ry - qy * rx) / den;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? t : null;
+}
+function insidePoly(p, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// percorre a árvore a partir da base: linha aberta corta no primeiro cruzamento; silhueta fechada corta
+// quando o galho sai dela (um tronco que entra por baixo da silhueta não é cortado ao entrar)
+function planStroke(s) {
+  if (!s || s.length < 2 || !state.root) return [];
+  const closed = strokeClosed(s), pts = closed ? [...s, s[0]] : s;
+  const segs = [];
+  for (let i = 1; i < pts.length; i++) {
+    const c = pts[i - 1], d = pts[i];
+    segs.push([c, d, Math.min(c[0], d[0]), Math.max(c[0], d[0]), Math.min(c[1], d[1]), Math.max(c[1], d[1])]);
+  }
+  const plans = [];
+  const walk = (n, inside) => {
+    const a = toScreen(n._s), b = toScreen(n._e);
+    if (a[2] < 1 && b[2] < 1) {   // atrás da câmera não conta
+      const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+      const ts = [];
+      for (const [c, d, sx0, sx1, sy0, sy1] of segs) {
+        if (sx1 < x0 || sx0 > x1 || sy1 < y0 || sy0 > y1) continue;
+        const t = crossAt(a, b, c, d);
+        if (t != null) ts.push(t);
+      }
+      ts.sort((p, q) => p - q);
+      for (const t of ts) {
+        if (!closed || inside) { plans.push(planAt(n, t)); return; }
+        inside = !inside;
+      }
+    }
+    for (const k of n.kids) walk(k, inside);
+  };
+  walk(state.root, closed && insidePoly(toScreen(state.root._s), pts));
+  return plans;
+}
+
+// destaca o que vai sair enquanto o traço é desenhado
+function previewStroke() {
+  shapeRaf = 0;
+  shapePreview = planStroke(stroke);
+  const set = new Set();
+  for (const p of shapePreview) { for (const n of p.removed) set.add(n); if (!p.whole) set.add(p.n); }
+  hoverSet = set; colorBranches();
+  const size = shapePreview.reduce((t, p) => t + p.removed.size + (p.whole ? 0 : 1), 0);
+  hint.textContent = shapePreview.length
+    ? `${strokeClosed(stroke) ? 'Silhueta fechada: corta o que sai dela' : 'Linha: corta o que a atravessa'} · ${shapePreview.length} ${shapePreview.length === 1 ? 'corte' : 'cortes'} · ${size} ${size === 1 ? 'ramo afetado' : 'ramos afetados'} · solte para podar, Esc cancela`
+    : 'Desenhe por onde a tesoura passa · feche o traço para fazer uma silhueta · Esc cancela';
+}
+
+function startStroke(e) { stroke = [[e.clientX, e.clientY]]; shapePreview = null; drawStroke(); }
+function extendStroke(e) {
+  const last = stroke.at(-1);
+  if (Math.hypot(e.clientX - last[0], e.clientY - last[1]) < 4) return;
+  stroke.push([e.clientX, e.clientY]);
+  drawStroke();
+  if (!shapeRaf) shapeRaf = requestAnimationFrame(previewStroke);
+}
+function cancelStroke() {
+  stroke = null; shapePreview = null;
+  if (shapeRaf) { cancelAnimationFrame(shapeRaf); shapeRaf = 0; }
+  drawStroke();
+  hoverSet = new Set(); colorBranches();
+  hint.textContent = HINT_FOR();
+}
+function finishStroke() {
+  if (shapeRaf) { cancelAnimationFrame(shapeRaf); shapeRaf = 0; }
+  const plans = planStroke(stroke);
+  cancelStroke();
+  if (!plans.length) { toast('O traço não cruzou nenhum galho. Desenhe por cima dos galhos que quer cortar.'); return; }
+  pushUndo();
+  const firstCut = state.cuts === 0;
+  for (const p of plans) cut(p, { undo: false, refresh: false });
+  setHover(null); rebuild(); updateHud(); save();
+  toast(`${plans.length} ${plans.length === 1 ? 'corte' : 'cortes'} na forma desenhada. Ctrl+Z desfaz tudo de uma vez.`
+    + (firstCut ? ' Sem as pontas, as gemas abaixo dos cortes vão brotar: repita a poda conforme a copa preenche a forma.' : ''));
+}
 
 // ---------- Mouse ----------
 // Poda: clique sem arrastar poda; arrastar gira a câmera; clique no vazio pausa.
 // Arame: clique seleciona o galho; arrastar um ponto dobra; arrastar fora dos pontos gira a câmera.
 el.addEventListener('pointerdown', e => {
   down = { x: e.clientX, y: e.clientY, b: e.button };
+  // traço: o botão esquerdo desenha (com Alt, gira a câmera como sempre)
+  if (tool === 'shape' && e.button === 0 && !e.altKey) {
+    startStroke(e);
+    e.stopImmediatePropagation();
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    return;
+  }
   if (tool === 'wire' && e.button === 0) {
     const h = pickHandle(e);
     if (h) {
@@ -2051,6 +2198,7 @@ el.addEventListener('pointerdown', e => {
 }, { capture: true });   // antes da câmera, para ela não girar ao puxar um ponto
 el.addEventListener('pointermove', e => {
   if (drag) { moveDrag(e); colorHandles(); return; }
+  if (tool === 'shape') { if (stroke) extendStroke(e); el.style.cursor = 'crosshair'; return; }
   if (tool === 'wire') {
     const h = e.buttons ? null : pickHandle(e);
     if (h !== hoverHandle) { hoverHandle = h; colorHandles(); }
@@ -2065,9 +2213,10 @@ el.addEventListener('pointermove', e => {
   setHover(hit);
   showTip(hit, e);
 });
-el.addEventListener('pointerleave', () => { if (!drag) { setHover(null); hoverSet = new Set(); colorBranches(); tipEl.hidden = true; } });
+el.addEventListener('pointerleave', () => { if (!drag && !stroke) { setHover(null); hoverSet = new Set(); colorBranches(); tipEl.hidden = true; } });
 el.addEventListener('pointerup', e => {
   if (drag) { endDrag(); down = null; return; }
+  if (stroke) { if (stroke.length > 1) finishStroke(); else cancelStroke(); down = null; return; }
   if (down && down.b === 0 && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
     const hit = pick(e);
     // Shift+clique junta (ou tira) um galho da seleção; Shift+clique no vazio não desfaz a seleção
@@ -2436,7 +2585,7 @@ updateCare();
 setCamera(withFront(VIEWS.home), HOME_TARGET);
 setInterval(save, 5000);
 // exposto para depuração no console
-window.bonsai = { openAssistant, assess: () => assess(), SPECIES, bloomAmount, get flowers() { return flowers; }, stepDay, newTree, ser, de, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
+window.bonsai = { planStroke, strokeCut: s => { stroke = s; finishStroke(); }, toScreen, openAssistant, assess: () => assess(), SPECIES, bloomAmount, get flowers() { return flowers; }, stepDay, newTree, ser, de, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
   transplant, pruneRoots, rootFill, potFactor, setSpot, defoliate, avgLeafLen, foliageNow, lightNow,
   get leaves() { return leaves; }, setTool, selectBranch, bendAngle, bendLimit, removeWires,
   get wireChain() { return wireChain; }, get wireBases() { return wireBases; }, get handles() { return handleGroup.children; },
