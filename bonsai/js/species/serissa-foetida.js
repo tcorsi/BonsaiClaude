@@ -42,6 +42,7 @@ export default {
     swell: 0.5,
     heal: 1.8,             // madeira dura: o calo fecha mais devagar
     woundFrom: 2.5,
+    green: 0.3,            // ramo verde (antes de lignificar) engrossa só 30% do ritmo da madeira
   },
   lateralChance: 0.4,      // arbusto: a ponta do tronco solta ramos com frequência
   // fase juvenil curta: a estaca ramifica cedo, logo acima de ~12 cm

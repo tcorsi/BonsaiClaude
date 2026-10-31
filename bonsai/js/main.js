@@ -469,7 +469,8 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
   });
   // crescimento secundário (modelo de tubos): madeira nova ∝ folhas acima ÷ espessura que já existe
   const th = SP.thickening, girth = n.girth + th.girthOffset;
-  const ring = th.perLeaf * area * (state.shade ?? 1) / girth * (n.depth === 0 ? 1 + th.collar : 1);
+  // ramo verde engrossa pouco (o diâmetro dele vem do crescimento primário); os anéis aceleram ao lignificar
+  const ring = th.perLeaf * area * (state.shade ?? 1) / girth * (n.depth === 0 ? 1 + th.collar : 1) * lerp(th.green, 1, lignin(n));
   // um lateral com mais folhas que a própria continuação despeja tudo na junção, que incha:
   // esse inchaço (knot) é local e não desce pelo tronco, então aparece como conicidade invertida
   const knot = side > main * th.swellFrom ? th.swell * th.perLeaf * (side - main * th.swellFrom) * (state.shade ?? 1) / girth : 0;
@@ -487,7 +488,14 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
   const w = n.wire;
   // a forma fixa enquanto a madeira se forma: cada dia de crescimento ativo conta (inverno quase não conta)
   if (w && (w.prog ?? 0) < 1) w.prog = Math.min(1, wireProgress(n) + setActivity() / w.set);
-  if (w && !w.bitten && n.girth > w.girth0 + Math.max(0.65, w.girth0 * SP.wiring.bite)) {
+  // casca verde é elástica: enquanto o trecho não lignifica, ela cede sob o arame e o engrossamento não marca
+  // (inclui o que vem do modelo de tubos); a marca só acumula conforme a madeira endurece
+  if (w && !w.bitten) {
+    const grew = n.girth - (w.seen ?? n.girth);
+    if (grew > 0) w.girth0 += grew * (1 - lignin(n));
+    w.seen = n.girth;
+  }
+  if (w && !w.bitten && n.girth > wireBiteAt(w)) {
     w.bitten = true;
     n.scar = true;
     notify('wirebite', 'O arame começou a marcar a casca de um galho! Use a ferramenta 🪢 para ver e remover o arame.');
@@ -1636,6 +1644,10 @@ function placeTip(e) {
 // Dobrar = girar a direção do segmento (e de tudo que sai dele) em torno da sua base.
 // wire.q acumula a rotação aplicada desde que o arame foi colocado: é a "curvatura" que o galho está aguentando.
 const lignin = n => clamp(n.age / SP.wiring.lignifyDays, 0, 1);   // 0 = ramo verde, 1 = madeira
+// espessura em que o arame começa a marcar a casca: um broto recém-formado ainda expande até o diâmetro
+// de ramo novo (crescimento primário, ~1,2 mm) sem marcar; daí em diante conta o engrossamento da madeira
+const PRIMARY_GIRTH = 1.3;
+const wireBiteAt = w => { const g = Math.max(w.girth0, PRIMARY_GIRTH); return g + Math.max(0.65, g * SP.wiring.bite); };
 function bendLimit(n) {   // graus de curvatura seguros para este segmento
   const w = SP.wiring, woody = w.woodyLimit / (1 + n.girth * 0.95 / 4);
   return lerp(w.greenLimit, woody, lignin(n)) * (seasonOf(state.day) === 3 ? w.winterFactor : 1);
@@ -1921,7 +1933,7 @@ function renderWirePanel() {
     const oldest = wired.reduce((a, n) => n.wire.day < a.wire.day ? n : a);
     const days = state.day - oldest.wire.day, p = wireProgress(oldest);
     const bitten = wired.some(n => n.wire.bitten);
-    const left = Math.max(0, (oldest.wire.girth0 + Math.max(0.65, oldest.wire.girth0 * SP.wiring.bite) - oldest.girth) * 0.95);
+    const left = Math.max(0, (wireBiteAt(oldest.wire) - oldest.girth) * 0.95);
     // dias que faltam no ritmo de crescimento de agora (no inverno a fixação quase para)
     const act = setActivity(), left2 = Math.ceil((1 - p) * oldest.wire.set / Math.max(act, 0.05));
     status = `Arame há ${days} dias · forma ${p >= 1 ? '<b>fixada</b>: pode remover'

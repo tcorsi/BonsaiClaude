@@ -36,7 +36,7 @@ export default {
   // à área foliar que ele sustenta acima (os açúcares das folhas descem pelo floema e viram anel);
   // por isso um galho de sacrifício cheio de folhas engrossa tudo o que está abaixo dele
   thickening: {
-    perLeaf: 0.0095,       // anel por unidade de área foliar acima (× RATE ÷ (espessura + girthOffset), por dia)
+    perLeaf: 0.0103,       // anel por unidade de área foliar acima (× RATE ÷ (espessura + girthOffset), por dia)
     girthOffset: 10,       // somado à espessura no divisor: muda fina não engrossa desproporcionalmente
     shadeAt: 350,          // área foliar a partir da qual a copa se sombreia: acima disso rende ~ raiz quadrada
     collar: 0.6,           // o colo do tronco engrossa a mais (também pelo sistema de raízes)
@@ -44,6 +44,7 @@ export default {
     swell: 0.5,            // quanto a junção incha (conicidade invertida, típica do sacrifício esquecido)
     heal: 2.5,             // o calo fecha a ferida ~2,5× mais rápido que o anel normal da madeira
     woundFrom: 2.5,        // galhos removidos a partir desta espessura (~2,4 mm) deixam cicatriz visível
+    green: 0.3,            // ramo verde (antes de lignificar) engrossa só 30% do ritmo da madeira
   },
   lateralChance: 0.25,     // chance da ponta do tronco adulto soltar um ramo a cada novo nó (fora a onda axilar)
   // fase juvenil: a muda sobe numa haste única até ~40 cm e só então o tronco solta ramos (primários);
