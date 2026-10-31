@@ -17,9 +17,11 @@
   #date { padding: 4px 8px; font-weight: 600; }
   #date small { font-weight: 400; color: var(--ui-muted); margin-left: 6px; }
   #info { flex-wrap: wrap; }
-  #measures { padding: 4px 8px; border-left: 1px solid rgba(0,0,0,.1); font-size: 14px; color: var(--ui-fg);
+  #measures, #branches { padding: 4px 8px; border-left: 1px solid rgba(0,0,0,.1); font-size: 14px; color: var(--ui-fg);
     font-variant-numeric: tabular-nums; }
-  #measures b { font-weight: 600; }
+  #measures b, #branches b { font-weight: 600; }
+  #branches[hidden] { display: none; }
+  #branches small { color: var(--ui-muted); font-size: 13px; }
   button { font: inherit; font-size: 14px; border: 0; background: transparent; padding: 6px 10px; border-radius: 8px;
     cursor: pointer; color: var(--ui-fg); }
   button:hover { background: rgba(0,0,0,.06); }
@@ -103,6 +105,7 @@
   <div class="panel" id="info">
     <button id="speciesBtn" title="Ver ficha da espécie"></button><span id="date"></span>
     <span id="measures" title="Altura do solo até a ponta mais alta · diâmetro do tronco logo acima das raízes"></span>
+    <span id="branches" hidden></span>
   </div>
   <div class="panel" id="speeds">
     <button id="undo" title="Desfazer (Ctrl+Z)" disabled>↶ Desfazer</button>
@@ -2601,6 +2604,24 @@ function updateHud() {
     ? `📏 Altura <b>${fmtLength(height)}</b> · ⌀ base <b>${fmtLength(base)}</b>`
       + (avgLeafLen() ? ` · 🍃 folhas <b>~${fmtLength(avgLeafLen())}</b>` : '')
     : '📏 Ainda sem caule';
+
+  // contador de ramos: cada broto lateral é um ramo; a ordem diz de onde ele sai
+  // (1ª = do tronco, 2ª = de um ramo de 1ª, ...); a continuação de um eixo não conta como ramo novo
+  const byOrder = [];
+  (function walk(n, order) {
+    n.kids.forEach((k, i) => {
+      const o = i === 0 ? order : order + 1;
+      if (i > 0) byOrder[o - 1] = (byOrder[o - 1] ?? 0) + 1;
+      walk(k, o);
+    });
+  })(state.root, 0);
+  const total = byOrder.reduce((a, c) => a + (c ?? 0), 0), third = byOrder.slice(2).reduce((a, c) => a + (c ?? 0), 0);
+  const el = document.getElementById('branches');
+  el.hidden = state.germ > 0;
+  const parts = [byOrder[0] && `1ª ${byOrder[0]}`, byOrder[1] && `2ª ${byOrder[1]}`, third && `3ª+ ${third}`].filter(Boolean);
+  el.innerHTML = `🌿 Ramos <b>${total}</b>` + (parts.length > 1 ? ` <small>${parts.join(' · ')}</small>` : '');
+  el.title = total ? `${byOrder[0] ?? 0} primários (saem do tronco) · ${byOrder[1] ?? 0} secundários · ${third} terciários ou mais`
+    : 'Ainda sem ramos: a muda sobe numa haste única até ~40 cm';
 }
 
 const MM_PER_UNIT = 1;
