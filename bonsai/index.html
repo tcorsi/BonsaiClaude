@@ -463,7 +463,7 @@ const CARE_DEFAULTS = { water: 0.7, humidity: 0.6, vigor: 1, recovery: 1, waterU
   foliageAvg: null,                            // média recente da folhagem (equilíbrio raiz/copa)
   trunkMax: 0,                                 // maior altura que o tronco já atingiu (fim da fase juvenil)
   health: 1, dead: false, deathCause: null,
-  front: 0.35 };                               // lado escolhido como frente do bonsai (ângulo em volta do vaso)  // saúde (seca/encharcamento); morta não cresce mais
+  front: 0 };                                  // lado escolhido como frente do bonsai (ângulo em volta do vaso)  // saúde (seca/encharcamento); morta não cresce mais
 
 // ---------- Luz ----------
 const SPOTS = {
@@ -1085,6 +1085,7 @@ function applySave(s) {
     state = { ...structuredClone(CARE_DEFAULTS), day: s.day, cuts: s.cuts ?? 0, species: s.species ?? 'ficus-microcarpa',
       origin: s.origin ?? 'muda', germ: s.germ ?? 0, name: s.name || defaultName(s.origin), root: de(s.root) };
     for (const k of Object.keys(CARE_DEFAULTS)) if (s[k] !== undefined) state[k] = s[k];
+    if (state.front === 0.35) state.front = 0;   // padrão de uma versão anterior (a vista padrão já tem esse giro)
     SP = SPECIES[state.species] ?? SPECIES['ficus-microcarpa'];
     // saves do calendário antigo (120 dias/ano): converte a data e a idade dos ramos
     if (s.cal !== YEAR) {
@@ -1584,7 +1585,7 @@ controls.screenSpacePanning = true;
 
 const HOME_TARGET = new THREE.Vector3(0, 90, 0);
 const VIEWS = {
-  home:   { r: 680, phi: 1.33, theta: 0 },
+  home:   { r: 680, phi: 1.33, theta: 0.35 },   // vista padrão: um pouco de lado e de cima, olhando a frente
   top:    { r: 620, phi: 0.001, theta: 0 },
   front:  { r: 640, phi: Math.PI / 2, theta: 0 },
   back:   { r: 640, phi: Math.PI / 2, theta: Math.PI },
@@ -1627,7 +1628,7 @@ document.getElementById('setFront').addEventListener('click', () => {
   state.front = s.theta;
   save();
   goToView('home');
-  toast('Frente definida! O botão ⌂ e o cubo agora usam este lado como frente.');
+  toast('Frente definida! O cubo e o botão ⌂ agora usam este lado como frente.');
 });
 
 // esconder as folhas para ver só a estrutura dos galhos
