@@ -1881,8 +1881,11 @@ function cut(plan, { undo = true } = {}) {
   } else {
     // corta o galho no ponto escolhido; o toco fica e solta brotos novos
     const n = plan.n;
+    const rCut = radiusAt(n, Math.min(plan.keep, n.len) / Math.max(n.len, 0.01));   // espessura no ponto do corte
     n.len = n.target = Math.min(plan.keep, n.len);
     n.kids = [];
+    // toco grosso: fica a superfície do corte (madeira clara), que o calo fecha conforme os brotos novos engrossam
+    if (n.girth >= SP.thickening.woundFrom) (n.wounds ??= []).push({ r: rCut, r0: rCut, dir: [...n.dir] });
     n.aerial = n.aerial.filter(r => r.d <= n.len);   // raízes acima do corte saem junto
     n.stopped = true;
     // beliscar a ponta (tirar só o crescimento novo) solta 1–2 brotos; um corte forte, de muitos ramos, solta mais
