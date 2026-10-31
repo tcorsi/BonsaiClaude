@@ -225,8 +225,9 @@ const SPECIES = {
       reach: 100,             // até quantos mm abaixo do corte/dobra as gemas sentem a liberação
       decay: 40,              // a chance cai com a distância (mm); perto do corte brota mais
       prune: 1,               // gemas acordadas por nó logo abaixo do corte (vai caindo com a distância)
-      pinch: 0.12,            // ... num beliscão (só a ponta nova sai): a bifurcação já ramifica, embaixo acorda pouco
+      pinch: 0.01,            // ... num beliscão (só a ponta nova sai): o Y assume logo; embaixo quase nada acorda
       hardCut: 15,            // ramos removidos para o corte contar como poda forte (efeito total)
+      reinhibit: 0.9,         // quando o Y abre, chance de cada gema acordada perto dele voltar a dormir
       bend: 1,                // ... e ao deitar o galho com arame (proporcional a quanto ele deitou)
       bendFrom: 70,           // a partir de quantos graus da vertical o galho "deitado" perde a dominância
       bendFull: 30,           // graus além disso para o efeito máximo (≈ 100°: horizontal ou um pouco abaixo)
@@ -657,11 +658,20 @@ function stepDay(skipCare = false) {
 
 // copa densa demais: raminhos baixos e sombreados secam e caem (autodesrama),
 // abrindo espaço para a árvore continuar crescendo nas pontas
+// raminho de no máximo 3 segmentos em linha, sem ramificar
+function smallTwig(k) {
+  let c = k, len = 1;
+  while (c.kids.length === 1 && len <= 3) { c = c.kids[0]; len++; }
+  return c.kids.length === 0 && len <= 3;
+}
 function shedShadedTwigs(quiet) {
   const candidates = [];
   (function walk(n) {
     for (const k of n.kids) {
-      if (k.depth >= 4 && k._e && n.kids.length > 1 && k.kids.length <= 1) candidates.push({ k, parent: n });
+      // só raminhos pequenos (até 3 segmentos); um galho inteiro não seca de uma vez, e um toco podado
+      // esperando brotar (Y ou gemas) não conta como raminho sombreado
+      if (k.depth >= 4 && k._e && n.kids.length > 1 && k.kids.length <= 1 && k.fork == null && !k.buds
+          && smallTwig(k)) candidates.push({ k, parent: n });
       walk(k);
     }
   })(state.root);
@@ -831,6 +841,7 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
       const phi = rand(0, Math.PI * 2), [a, b] = SP.fork.tilt;
       if (nodeCount < MAX_NODES) sprout(n, false, true, { phi, tilt: rand(a, b) });
       if (nodeCount < MAX_NODES) sprout(n, false, true, { phi: phi + Math.PI + rand(-0.3, 0.3), tilt: rand(a, b) });
+      reinhibit(n);   // as pontas novas voltam a produzir auxina e seguram as outras gemas
     }
     // muda que passou da fase juvenil: as gemas axilares ao longo do tronco abrem e formam os ramos primários
     // (só em trechos do tronco com menos de 1 ano: madeira velha não volta a brotar assim)
@@ -844,8 +855,10 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
         // gema em madeira velha pode desistir e voltar a dormir (num toco sem galhos a última sempre fica)
         if ((n.kids.length || n.buds > 1) && Math.random() < (1 - vig) * SP.apical.budAbort) { n.buds--; continue; }
         if (Math.random() >= SP.backBudding * g * RATE * vig) continue;
-        sprout(n, !n.kids.length && Math.random() < 0.5, true);
+        const firstShoot = !n.kids.length;
+        sprout(n, firstShoot && Math.random() < 0.5, true);
         n.buds--;
+        if (firstShoot) { reinhibit(n); break; }   // toco que ganhou ponta nova volta a ter dominância
       }
     }
   }
@@ -1777,6 +1790,18 @@ function setHover(hit) {
 function budVigor(n) {
   const a = SP.apical;
   return lerp(1, a.oldWood, clamp((n.age - a.matureDays) / (a.oldDays - a.matureDays), 0, 1));
+}
+
+// Volta da dominância: as pontas novas (Y) produzem auxina de novo e as gemas acordadas pela poda que
+// ainda não brotaram voltam a dormir; mais perto, mais forte. Em toco grosso (poda forte) a raiz manda
+// mais citocinina para pouca copa e a inibição é mais fraca: brotação múltipla continua possível.
+function reinhibit(start) {
+  const a = SP.apical, strength = a.reinhibit * lerp(1, 0.4, clamp((start.girth * 0.95 - 2) / 6, 0, 1));
+  let dist = 0;
+  for (let cur = start; cur && dist <= a.reach; dist += cur.len, cur = cur._p) {
+    const p = strength * Math.exp(-dist / a.decay);
+    for (let i = cur.buds; i > 0; i--) if (Math.random() < p) cur.buds--;
+  }
 }
 
 // Libera a dominância apical: descendo pelo galho a partir de `start` (em direção à base),
