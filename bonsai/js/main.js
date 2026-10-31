@@ -5,6 +5,7 @@ import { SPECIES, DEFAULT_SPECIES } from './species/index.js';
 import { CONTAINERS, CONTAINER_ORDER } from './containers.js';
 import { setupRender, QUALITY, QUALITY_ORDER } from './render.js';
 import { makeDraggable } from './drag.js';
+import { evaluate } from './assistant.js';
 
 let SP = SPECIES[DEFAULT_SPECIES];
 // nome da planta nos avisos: theSp() = "o ficus", TheSp() = "O ficus"
@@ -2188,6 +2189,27 @@ const leavesAt = n => (SP.leaf.arrangement === 'opposite' ? 2 : 1) + (n.kids.len
 // ângulo entre as folhas do mesmo nó: espiral (ângulo áureo) ou frente a frente
 const leafStep = () => SP.leaf.arrangement === 'opposite' ? Math.PI : 2.4;
 
+// assistente: avalia a planta sob demanda (estilo, nota de 0 a 10 por categoria, pontos fortes e sugestões)
+const assistCard = document.getElementById('assistCard');
+const fmt1 = x => x.toFixed(1).replace('.', ',');
+const scoreColor = s => s >= 7 ? '#3f7d4e' : s >= 4.5 ? '#c9a23c' : '#c0583a';
+const assess = () => { rebuild(); return evaluate({ state, nodes, SP, pot: container(), rootFill: rootFill(), avgLeaf: avgLeafLen(), soil: SOIL_TOP }); };
+function openAssistant() {
+  const r = assess();
+  const head = '<header><h2>💬 Assistente</h2><button id="assistClose" title="Fechar">✕</button></header>';
+  if (r.dead) assistCard.innerHTML = head + '<p>A planta morreu. Comece uma nova pelo menu Planta.</p>';
+  else if (r.seed) assistCard.innerHTML = head + '<p>Ainda é uma semente. Mantenha a terra úmida e no calor; volte quando ela brotar.</p>';
+  else assistCard.innerHTML = head
+    + `<div class="score"><b style="color:${scoreColor(r.score)}">${fmt1(r.score)}</b><span>/ 10 · ${r.level}</span></div>` + (r.capNote ? `<p class="m">${r.capNote}</p>` : '')
+    + `<div class="style"><b>Estilo: ${r.style.name}</b>${r.style.jp ? ` <i>(${r.style.jp})</i>` : ''}<p>Por quê: ${r.style.why}.</p><p>${r.style.desc}</p></div>`
+    + r.cats.map(c => `<div class="cat"><span>${c.name}</span><div class="bar"><i style="width:${c.score * 10}%;background:${scoreColor(c.score)}"></i></div><em>${fmt1(c.score)}</em></div>`).join('')
+    + (r.good.length ? '<h3>👍 Pontos fortes</h3><ul>' + r.good.map(g => `<li>${g}</li>`).join('') + '</ul>' : '')
+    + (r.tips.length ? '<h3>🛠️ Sugestões</h3><ul>' + r.tips.map(t => `<li>${t.text}${t.tip ? `<small>${t.tip}</small>` : ''}</li>`).join('') + '</ul>' : '<h3>Nada a corrigir agora 🎉</h3>');
+  assistCard.hidden = false;
+  document.getElementById('assistClose').addEventListener('click', () => assistCard.hidden = true);
+}
+document.getElementById('assistBtn').addEventListener('click', () => assistCard.hidden ? openAssistant() : (assistCard.hidden = true));
+
 // ficha da espécie
 const speciesBtn = document.getElementById('speciesBtn');
 const speciesCard = document.getElementById('speciesCard');
@@ -2374,7 +2396,7 @@ syncQualityBtn();
 R.tune();
 
 // todos os painéis podem ser arrastados pela tela (e vêm para a frente ao abrir ou ao serem tocados)
-for (const id of ['speciesCard', 'newMenu', 'potMenu', 'wirePanel', 'deathCard', 'care', 'views']) makeDraggable(document.getElementById(id));
+for (const id of ['assistCard', 'speciesCard', 'newMenu', 'potMenu', 'wirePanel', 'deathCard', 'care', 'views']) makeDraggable(document.getElementById(id));
 
 let last = performance.now(), acc = 0, time = 0;
 function frame(now) {
@@ -2414,7 +2436,7 @@ updateCare();
 setCamera(withFront(VIEWS.home), HOME_TARGET);
 setInterval(save, 5000);
 // exposto para depuração no console
-window.bonsai = { SPECIES, bloomAmount, get flowers() { return flowers; }, stepDay, newTree, ser, de, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
+window.bonsai = { openAssistant, assess: () => assess(), SPECIES, bloomAmount, get flowers() { return flowers; }, stepDay, newTree, ser, de, rebuild, calcWidth, countNodes, goToView, camera, controls, frame, cut, planCut, undo, water, mist,
   transplant, pruneRoots, rootFill, potFactor, setSpot, defoliate, avgLeafLen, foliageNow, lightNow,
   get leaves() { return leaves; }, setTool, selectBranch, bendAngle, bendLimit, removeWires,
   get wireChain() { return wireChain; }, get wireBases() { return wireBases; }, get handles() { return handleGroup.children; },

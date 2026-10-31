@@ -7,6 +7,28 @@ canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
 .draggable { cursor: grab; }
 .draggable button, .draggable input, .draggable select, .draggable label { cursor: pointer; }
 .draggable.dragging { cursor: grabbing; user-select: none; box-shadow: 0 8px 28px rgba(0,0,0,.18); }
+/* assistente */
+#assistCard { position: fixed; top: 72px; right: 80px; width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 96px);
+  overflow-y: auto; display: block; padding: 14px 16px; font-size: 13px; z-index: 35; }
+#assistCard[hidden] { display: none; }
+#assistCard header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+#assistCard header h2 { margin: 0; font-size: 16px; flex: 1; }
+#assistCard header button { background: none; font-size: 16px; padding: 2px 6px; }
+#assistCard .score { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 8px; }
+#assistCard .score b { font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
+#assistCard .score span { color: var(--ui-muted); }
+#assistCard .style { background: rgba(63,125,78,.08); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+#assistCard .style i { color: var(--ui-muted); }
+#assistCard .style p { margin: 4px 0 0; color: var(--ui-muted); }
+#assistCard .cat { display: grid; grid-template-columns: 110px 1fr 34px; gap: 8px; align-items: center; margin: 3px 0; }
+#assistCard .cat .bar { height: 6px; background: rgba(0,0,0,.08); border-radius: 3px; overflow: hidden; }
+#assistCard .cat .bar i { display: block; height: 100%; border-radius: 3px; }
+#assistCard .cat em { font-style: normal; text-align: right; font-variant-numeric: tabular-nums; }
+#assistCard .m { color: var(--ui-muted); margin: -4px 0 8px; }
+#assistCard h3 { font-size: 13px; margin: 12px 0 4px; }
+#assistCard ul { margin: 0; padding-left: 18px; }
+#assistCard li { margin: 3px 0; }
+#assistCard li small { display: block; color: var(--ui-muted); }
 #hud { position: fixed; top: 16px; left: 16px; right: 16px; display: flex; flex-wrap: wrap; gap: 8px;
   justify-content: space-between; align-items: center; pointer-events: none; }
 .panel { pointer-events: auto; background: var(--ui-bg); backdrop-filter: blur(8px); border-radius: 12px;
