@@ -849,7 +849,8 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
         && Math.random() < SP.branching.axillary * g * RATE * branchJuv()) sprout(n, false);
     // gemas latentes acordam onde houve poda; num toco sem galhos, uma delas pode virar a nova ponta
     // cada gema acordada brota por conta própria (várias podem abrir na mesma época)
-    if (n.buds > 0 && n.len >= n.target && n.depth < MAX_DEPTH) {
+    // (num toco com Y agendado as gemas são as do próprio Y: esperam e abrem juntas com ele)
+    if (n.buds > 0 && n.fork == null && n.len >= n.target && n.depth < MAX_DEPTH) {
       const vig = budVigor(n);
       for (let i = n.buds; i > 0 && nodeCount < MAX_NODES; i--) {
         // gema em madeira velha pode desistir e voltar a dormir (num toco sem galhos a última sempre fica)
@@ -1863,10 +1864,16 @@ function cut(plan, { undo = true } = {}) {
     if (wasApex) {
       p.stopped = true;                      // a gema da ponta foi removida...
       if (!p.kids.length) scheduleFork(p, clamp(plan.removed.size / SP.apical.hardCut, 0, 1));   // ...o toco bifurca
-      else p.buds = Math.min(4, p.buds + 2);  // ...ou as gemas junto dos laterais que ficaram brotam
+      else {
+        // corte logo acima de um nó com lateral: o lateral vira a nova ponta (assume a dominância)
+        // e a gema daquela axila já foi usada; às vezes uma gema acessória ainda rompe
+        if (Math.random() < 0.3) p.buds = Math.min(4, p.buds + 1);
+      }
     } else if (Math.random() < 0.5) p.buds = Math.min(4, p.buds + 1);   // tirar um lateral às vezes acorda a gema acessória
-    // tirar a ponta libera as gemas ao longo do galho; tirar só um lateral libera bem menos
-    releaseApical(p, SP.apical.prune * (wasApex ? 1 : 0.3));
+    // a liberação começa no nó de baixo (o do corte já foi tratado acima). Tirar a ponta de um toco sem
+    // laterais libera conforme a força do corte; se um lateral assumiu a ponta, ou se só um lateral saiu, quase nada
+    const hard = clamp(plan.removed.size / SP.apical.hardCut, 0, 1);
+    releaseApical(p._p, SP.apical.prune * (wasApex && !p.kids.length ? lerp(SP.apical.pinch, 1, hard) : 0.1));
   } else {
     // corta o galho no ponto escolhido; o toco fica e solta brotos novos
     const n = plan.n;
