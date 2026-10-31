@@ -257,7 +257,7 @@ const SPECIES = {
       heal: 2.5,             // o calo fecha a ferida ~2,5× mais rápido que o anel normal da madeira
       woundFrom: 2.5,        // galhos removidos a partir desta espessura (~2,4 mm) deixam cicatriz visível
     },
-    lateralChance: 0.7,      // chance de surgir um galho lateral a cada novo nó (na estrutura principal)
+    lateralChance: 0.25,     // chance da ponta do tronco adulto soltar um ramo a cada novo nó (fora a onda axilar)
     // fase juvenil: a muda sobe numa haste única até ~40 cm e só então o tronco solta ramos (primários);
     // os ramos só começam a ramificar sozinhos a partir de ~1 ano. Podar bifurca em qualquer fase.
     branching: {
@@ -265,7 +265,8 @@ const SPECIES = {
       matureAge: 730,         // depois dessa idade (dias) a planta é adulta mesmo sem ter passado da altura
       secondary: [365, 730],  // idade da planta em que galhos começam a soltar galhos sozinhos e chegam ao normal
       leaderBoost: 2.5,       // na fase juvenil a ponta cresce (1 + leaderBoost)× mais rápido
-      axillary: 0.015,        // muda madura: chance diária (× RATE) de cada nó do tronco soltar um ramo da gema axilar
+      axillary: 0.03,         // muda madura: chance diária (× RATE) de cada nó do tronco soltar um ramo da gema axilar
+      axillaryAge: 200,       // ... só enquanto o nó é jovem (dias): a onda de primários é curta
       internode: 0.55,        // ... com entrenós mais curtos (folhas próximas)
     },
     apicalDominance: 0.06,   // ramo adulto: o broto do ano quase só alonga; lateral sem poda é rara
@@ -822,13 +823,13 @@ function growRoots(n, g) {
 function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) {
   n.age++;
   if (g > 0) {
-    // a plântula sem ramos concentra a força na ponta e sobe mais rápido
-    const lead = 1 + SP.branching.leaderBoost * (1 - branchJuv());
+    // a muda juvenil concentra a força na ponta do tronco, que sobe mais rápido (só ela: galhos e brotos crescem normal)
+    const lead = onTrunk ? 1 + SP.branching.leaderBoost * (1 - branchJuv()) : 1;
     if (n.len < n.target) {
       n.len = Math.min(n.target, n.len + n.target * 0.13 * SP.shootGrowth * g * RATE * juvenile() * lead);
     } else if (!n.kids.length && !n.stopped && n.depth < MAX_DEPTH && Math.random() < 0.35 * SP.shootGrowth * g * RATE * lead) {
       if (nodeCount < MAX_NODES) {
-        sprout(n, true);
+        sprout(n, true, false, null, onTrunk);
         // fase juvenil: a plântula sobe numa haste única; a ramificação espontânea liga aos poucos
         const lateral = onTrunk ? SP.lateralChance * branchJuv() : SP.apicalDominance * secondaryBranching();
         if (Math.random() < lateral) sprout(n, false);
@@ -847,8 +848,8 @@ function grow(n, g, onTrunk = true, amt = leafAmount(state.day), parent = null) 
       reinhibit(n);   // as pontas novas voltam a produzir auxina e seguram as outras gemas
     }
     // muda que passou da fase juvenil: as gemas axilares ao longo do tronco abrem e formam os ramos primários
-    // (só em trechos do tronco com menos de 1 ano: madeira velha não volta a brotar assim)
-    if (onTrunk && n.kids.length === 1 && n.depth >= 3 && n.age > 30 && n.age < 365 && nodeCount < MAX_NODES
+    // (só em trechos jovens do tronco: madeira velha não volta a brotar assim)
+    if (onTrunk && n.kids.length === 1 && n.depth >= 3 && n.age > 30 && n.age < SP.branching.axillaryAge && nodeCount < MAX_NODES
         && Math.random() < SP.branching.axillary * g * RATE * branchJuv()) sprout(n, false);
     // gemas latentes acordam onde houve poda; num toco sem galhos, uma delas pode virar a nova ponta
     // cada gema acordada brota por conta própria (várias podem abrir na mesma época)
@@ -931,7 +932,7 @@ function gravitropicBend(n, g, onTrunk, parent) {
   rotateSubtree(n, q);
 }
 
-function sprout(n, leader, afterPrune = false, aim = null) {
+function sprout(n, leader, afterPrune = false, aim = null, trunkTip = false) {
   const d = n.dir;
   const u = norm(cross(d, Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]));
   const v = cross(d, u);
@@ -948,8 +949,8 @@ function sprout(n, leader, afterPrune = false, aim = null) {
   // pouca luz: entrenós longos (estiolamento). O alongamento vale para este entrenó, sem se acumular nos próximos
   const stretch = 1 + SP.light.stretch * (1 - lightNow());
   const base = n.target / (n.stretch ?? 1);
-  // plântula: entrenós curtos (folhas próximas), que se alongam ao normal quando a planta passa a ramificar
-  const juvLen = lerp(SP.branching.internode, 1, branchJuv());
+  // tronco da muda juvenil: entrenós curtos (folhas próximas), que se alongam ao normal quando a planta passa a ramificar
+  const juvLen = trunkTip ? lerp(SP.branching.internode, 1, branchJuv()) : 1;
   const target = Math.max(base * (leader ? rand(0.74, 0.86) : rand(0.6, 0.78)), min * rand(0.9, 1.15)) * stretch * juvLen;
   const kid = newNode(n.depth + 1, norm(dir), target);
   kid.dep = Math.acos(clamp(dot(kid.dir, d), -1, 1));   // ângulo com que nasceu em relação ao ramo de origem
